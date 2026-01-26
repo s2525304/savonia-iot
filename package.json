@@ -18,5 +18,8 @@
   "devDependencies": {
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
+  },
+  "dependencies": {
+    "@savonia-iot/common": "^1.0.0"
   }
 }

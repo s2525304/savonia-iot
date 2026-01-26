@@ -1,0 +1,21 @@
+{
+  "name": "@savonia-iot/common",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared types and schemas for Savonia IoT (Raspberry Pi + Azure)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

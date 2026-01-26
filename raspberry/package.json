@@ -18,6 +18,7 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
+    "@savonia-iot/common": "file:../packages/common",
     "better-sqlite3": "^12.6.2"
   }
 }

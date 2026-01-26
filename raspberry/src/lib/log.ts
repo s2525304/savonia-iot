@@ -16,10 +16,12 @@ function ensureDir(dir: string): void {
 }
 
 function getLevel(level?: string): string {
-	return (level ?? process.env.LOG_LEVEL ?? "info").toLowerCase();
+	// Priority: explicit config → environment → default
+	return (level || process.env.LOG_LEVEL || "info").toLowerCase();
 }
 
 export function createLogger(opts: LoggerOptions): winston.Logger {
+	// opts.level should be provided from config.logLevel
 	const level = getLevel(opts.level);
 	ensureDir(opts.logDir);
 
@@ -37,6 +39,11 @@ export function createLogger(opts: LoggerOptions): winston.Logger {
 		})
 	);
 
+	const consoleFormat = winston.format.combine(
+		winston.format.colorize({ all: true }),
+		baseFormat
+	);
+
 	const transports: winston.transport[] = [];
 
 	// Console logs (useful during development)
@@ -44,7 +51,7 @@ export function createLogger(opts: LoggerOptions): winston.Logger {
 		transports.push(
 			new winston.transports.Console({
 				level,
-				format: baseFormat
+				format: consoleFormat
 			})
 		);
 	}
@@ -60,6 +67,7 @@ export function createLogger(opts: LoggerOptions): winston.Logger {
 				dirname: opts.logDir,
 				filename: `${opts.serviceName}.%DATE%.log`,
 				datePattern: "YYYY-MM-DD",
+				maxSize: "50m",
 				maxFiles: "14d",
 				zippedArchive: false
 			})
@@ -71,6 +79,7 @@ export function createLogger(opts: LoggerOptions): winston.Logger {
 				dirname: opts.logDir,
 				filename: `${opts.serviceName}.error.%DATE%.log`,
 				datePattern: "YYYY-MM-DD",
+				maxSize: "10m",
 				maxFiles: "30d",
 				zippedArchive: false
 			})

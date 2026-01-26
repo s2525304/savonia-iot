@@ -45,7 +45,8 @@ async function loadConfigAndInitLogger(): Promise<{ sensorId: string; config: Ap
 
 	const logger = createLogger({
 		logDir: config.paths.logDir,
-		serviceName: `sensor-reader-${sensorId}`
+		serviceName: `sensor-reader-${sensorId}`,
+		level: config.logLevel
 	});
 
 	return { sensorId, config, logger };
@@ -144,9 +145,9 @@ async function main(): Promise<void> {
 		sensor
 	};
 
-	logger.info("Sensor reader starting (one-shot)");
-	logger.info("deviceId=%s", config.device.deviceId);
-	logger.info(
+	logger.debug("Sensor reader starting (one-shot)");
+	logger.debug("deviceId=%s", config.device.deviceId);
+	logger.debug(
 		"Selected sensor: id=%s type=%s valueType=%s intervalMs=%d unit=%s",
 		sensor.sensorId,
 		sensor.type,
@@ -163,7 +164,7 @@ async function main(): Promise<void> {
 		ctx.dbClose?.();
 	}
 
-	logger.info("Sensor reader exiting (one-shot)");
+	logger.debug("Sensor reader exiting (one-shot)");
 }
 
 main()

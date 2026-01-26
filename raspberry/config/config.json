@@ -9,6 +9,8 @@
     "logDir": "./tmp/savonia-iot"
   },
 
+  "logLevel": "debug",
+
   "transferrer": {
     "pollIntervalMs": 10000
   },

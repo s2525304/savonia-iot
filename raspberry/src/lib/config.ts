@@ -5,6 +5,8 @@ import { Command } from "commander";
 
 export type ValueType = "number" | "boolean" | "enum";
 
+export type LogLevel = "error" | "warn" | "info" | "http" | "verbose" | "debug" | "silly" | "auth";
+
 export interface SensorConfig {
     sensorId: string;
     type: string;
@@ -32,6 +34,8 @@ export interface AppConfig {
         logDir: string;
     };
 
+	logLevel: LogLevel;
+
 	transferrer?: {
 		pollIntervalMs?: number;
 	};
@@ -43,6 +47,7 @@ export interface AppConfig {
 
 const DEFAULT_SQLITE = "/var/lib/savonia-iot/buffer.sqlite";
 const DEFAULT_LOGDIR = "/var/log/savonia-iot";
+const DEFAULT_LOG_LEVEL: LogLevel = "info";
 
 function parseCommandLine(): { configPath: string } {
 	const program = new Command();
@@ -80,6 +85,20 @@ function validateConfig(cfg: AppConfig): void {
         throw new Error("config.device.deviceId is required");
     }
 
+	const allowedLogLevels: ReadonlySet<string> = new Set([
+		"error",
+		"warn",
+		"info",
+		"http",
+		"verbose",
+		"debug",
+		"silly",
+		"auth"
+	]);
+	if (!allowedLogLevels.has(cfg.logLevel)) {
+		throw new Error(`config.logLevel must be one of: ${Array.from(allowedLogLevels).join(", ")}`);
+	}
+
     if (!cfg.sensors || cfg.sensors.length === 0) {
         throw new Error("config.sensors must contain at least one sensor");
     }
@@ -109,7 +128,7 @@ export function loadConfig(): AppConfig {
     const { configPath } = parseCommandLine();
 
     const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<AppConfig>;
+    const parsed = JSON.parse(raw) as Partial<AppConfig> & { logLevel?: string };
 
     const cfg: AppConfig = {
         device: {
@@ -120,6 +139,7 @@ export function loadConfig(): AppConfig {
             sqlite: parsed.paths?.sqlite ?? DEFAULT_SQLITE,
             logDir: parsed.paths?.logDir ?? DEFAULT_LOGDIR
         },
+		logLevel: (parsed as any).logLevel ?? DEFAULT_LOG_LEVEL,
 		transferrer: {
 			pollIntervalMs: parsed.transferrer?.pollIntervalMs
 		},

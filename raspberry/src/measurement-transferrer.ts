@@ -1,4 +1,6 @@
 import type winston from "winston";
+import { TelemetrySchema } from "@savonia-iot/common";
+import type { TelemetryMessageValidated } from "@savonia-iot/common";
 
 import { loadConfig } from "./lib/config";
 import { createLogger } from "./lib/log";
@@ -11,10 +13,32 @@ function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function sendToIoTHubDummy(_payloadJson: string): Promise<void> {
+async function sendToIoTHubDummy(logger: winston.Logger, msg: TelemetryMessageValidated): Promise<void> {
 	// Dummy sender: always succeeds
 	// Later: publish MQTT message to Azure IoT Hub
+	logger.info("(dummy) would send telemetry: %s", JSON.stringify(msg));
 	return;
+}
+
+function parseTelemetryMessage(payloadJson: string): TelemetryMessageValidated {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(payloadJson) as unknown;
+	} catch (e) {
+		throw new Error("Invalid JSON in payloadJson");
+	}
+
+	const res = TelemetrySchema.safeParse(parsed);
+	if (!res.success) {
+		// Keep the error compact so it fits into DB columns/logs.
+		const issues = res.error.issues
+			.slice(0, 5)
+			.map(i => `${i.path.map(String).join(".") || "<root>"}: ${i.message}`)
+			.join("; ");
+		throw new Error(`Telemetry schema validation failed: ${issues}`);
+	}
+
+	return res.data;
 }
 
 async function main(): Promise<void> {
@@ -62,7 +86,8 @@ async function main(): Promise<void> {
 			const row = rows[0];
 
 			try {
-				await sendToIoTHubDummy(row.payloadJson);
+				const msg = parseTelemetryMessage(row.payloadJson);
+				await sendToIoTHubDummy(logger, msg);
 
 				// Success: delete measurement from the local buffer
 				deleteMeasurement(handle.db, row.id);
