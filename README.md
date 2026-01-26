@@ -1,2 +1,2 @@
 # savonia-iot
-Savonia Iot-ohjelmointi harjoitustyö
+Savonia Iot-ohjelmointi harjoitustyö.
