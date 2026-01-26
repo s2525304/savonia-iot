@@ -129,25 +129,39 @@ for (const s of sensors) {
 		''
 	].join('\\n');
 
-	console.log(unitName + '\\n' + timer);
+	console.log('@@UNIT ' + unitName);
+	process.stdout.write(timer + '\\n');
+	console.log('@@END');
 }
 " "$SENSOR_LIST_JSON" | while IFS= read -r line; do
-	# Each timer unit is printed as:
-	# first line: unitName
-	# then the unit content until an empty line at the end
-	UNIT_NAME="$line"
-	UNIT_PATH="$SYSTEMD_DIR/$UNIT_NAME"
+	if [[ "$line" == @@UNIT* ]]; then
+		UNIT_NAME="${line#@@UNIT }"
+		UNIT_PATH="$SYSTEMD_DIR/$UNIT_NAME"
+		CONTENT=""
+		continue
+	fi
 
-	# Read until blank line terminator
-	CONTENT=""
-	while IFS= read -r l; do
-		CONTENT+="$l"$'\n'
-		[[ -z "$l" ]] && break
-	done
+	if [[ "$line" == "@@END" ]]; then
+		if [[ -z "${UNIT_NAME:-}" ]]; then
+			echo "ERROR: encountered @@END without @@UNIT" >&2
+			exit 1
+		fi
+		echo "Writing $UNIT_PATH"
+		echo "$CONTENT" | sudo tee "$UNIT_PATH" >/dev/null
+		unset UNIT_NAME
+		unset UNIT_PATH
+		CONTENT=""
+		continue
+	fi
 
-	echo "Writing $UNIT_PATH"
-	echo "$CONTENT" | sudo tee "$UNIT_PATH" >/dev/null
+	# Accumulate content lines
+	if [[ -n "${UNIT_NAME:-}" ]]; then
+		CONTENT+="$line"$'\n'
+	fi
 done
+
+# Cleanup accidental broken unit files from older buggy installer (best effort)
+sudo rm -f "$SYSTEMD_DIR/[Unit]" "$SYSTEMD_DIR/[Timer]" "$SYSTEMD_DIR/[Install]" 2>/dev/null || true
 
 # -----------------------------
 # Reload systemd and enable services
