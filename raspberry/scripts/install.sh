@@ -28,6 +28,12 @@ if [[ ! -d "$REPO_ROOT" ]]; then
 	exit 1
 fi
 
+if [[ ! -x "/usr/bin/node" ]]; then
+	echo "ERROR: /usr/bin/node not found. Install Node.js system-wide (NodeSource recommended) so systemd can run services." >&2
+	echo "Try: sudo apt install -y nodejs" >&2
+	exit 1
+fi
+
 if [[ ! -f "$CONFIG_PATH" ]]; then
 	echo "ERROR: Config not found: $CONFIG_PATH"
 	exit 1
@@ -58,8 +64,12 @@ echo "Installing systemd unit templates..."
 sudo cp "$REPO_ROOT/raspberry/scripts/systemd/savonia-iot-transferrer.service" "$SYSTEMD_DIR/"
 sudo cp "$REPO_ROOT/raspberry/scripts/systemd/savonia-iot-sensor@.service" "$SYSTEMD_DIR/"
 
-# Patch the config path inside the two base units (simple replace)
-# (This keeps the units generic without having to maintain multiple copies)
+# Patch WorkingDirectory and config path inside the two base units
+# - WorkingDirectory must match the actual clone location (REPO_ROOT)
+# - --config path must match CONFIG_PATH
+sudo sed -i "s|^WorkingDirectory=.*$|WorkingDirectory=$REPO_ROOT|" "$SYSTEMD_DIR/savonia-iot-transferrer.service"
+sudo sed -i "s|^WorkingDirectory=.*$|WorkingDirectory=$REPO_ROOT|" "$SYSTEMD_DIR/savonia-iot-sensor@.service"
+
 sudo sed -i "s|--config .*config.json|--config $CONFIG_PATH|g" "$SYSTEMD_DIR/savonia-iot-transferrer.service"
 sudo sed -i "s|--config .*config.json|--config $CONFIG_PATH|g" "$SYSTEMD_DIR/savonia-iot-sensor@.service"
 

@@ -7,7 +7,7 @@ After=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/savonia-iot
-ExecStart=/usr/bin/node /home/pi/savonia-iot/raspberry/dist/measurement-transferrer.js --config /home/pi/savonia-iot/raspberry/config/config.json
+ExecStart=/usr/bin/node raspberry/dist/measurement-transferrer.js --config raspberry/config/config.json
 Restart=always
 RestartSec=2
 Environment=NODE_ENV=production
