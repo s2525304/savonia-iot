@@ -11,7 +11,9 @@
     "url": "https://github.com/s2525304/savonia-iot"
   },
   "scripts": {
-    "build": "npm run --workspaces --if-present build"
+    "build": "npm run --workspaces --if-present build",
+    "install:raspberry": "npm run -w raspberry install:raspberry",
+    "uninstall:raspberry": "npm run -w raspberry uninstall:raspberry"
   },
   "devDependencies": {
     "winston": "^3.19.0",
