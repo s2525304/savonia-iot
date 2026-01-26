@@ -1,0 +1,28 @@
+{
+  "device": {
+    "deviceId": "pi-01",
+    "location": "livingroom"
+  },
+
+  "paths": {
+    "sqlite": "./tmp/buffer.sqlite",
+    "logDir": "./tmp/savonia-iot"
+  },
+
+  "transferrer": {
+    "pollIntervalMs": 10000
+  },
+
+  "sensors": [
+    {
+      "sensorId": "pi-cpu-temp",
+      "type": "pi_cpu_temp",
+      "intervalMs": 60000
+    },
+    {
+      "sensorId": "random-temp",
+      "type": "random_temp",
+      "intervalMs": 60000
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[Unit]
+Description=Savonia IoT - Measurement Transferrer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/savonia-iot
+ExecStart=/usr/bin/node /home/pi/savonia-iot/raspberry/dist/measurement-transferrer.js --config /home/pi/savonia-iot/raspberry/config/config.json
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

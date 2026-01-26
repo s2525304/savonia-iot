@@ -1,0 +1,20 @@
+{
+  "name": "savonia-iot",
+  "private": true,
+  "workspaces": [
+    "azure",
+    "raspberry",
+    "packages/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/s2525304/savonia-iot"
+  },
+  "scripts": {
+    "build": "npm run --workspaces --if-present build"
+  },
+  "devDependencies": {
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  }
+}

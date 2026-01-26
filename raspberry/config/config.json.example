@@ -1,0 +1,30 @@
+{
+  "device": {
+    "deviceId": "pi-01",
+    "location": "livingroom"
+  },
+
+  "paths": {
+    "sqlite": "/var/lib/savonia-iot/buffer.sqlite",
+    "logDir": "/var/log/savonia-iot"
+  },
+
+  "sensors": [
+    {
+      "sensorId": "temp-1",
+      "type": "temperature",
+      "valueType": "number",
+      "unit": "C",
+      "intervalMs": 10000,
+      "gpio": 4
+    },
+    {
+      "sensorId": "door-1",
+      "type": "door",
+      "valueType": "enum",
+      "intervalMs": 10000,
+      "gpio": 17,
+      "enumValues": ["OPEN", "CLOSED"]
+    }
+  ]
+}

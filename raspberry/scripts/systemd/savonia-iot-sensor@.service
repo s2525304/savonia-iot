@@ -1,0 +1,15 @@
+[Unit]
+Description=Savonia IoT - Sensor Reader (%i)
+Wants=time-sync.target
+After=time-sync.target
+
+# If systemd-time-wait-sync.service exists on the system, waiting for it is the most reliable
+# way to ensure the clock is actually synchronized before reading sensors.
+After=systemd-time-wait-sync.service
+Wants=systemd-time-wait-sync.service
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/savonia-iot
+ExecStart=/usr/bin/node raspberry/dist/sensor-reader.js --config raspberry/config/config.json --sensorId %i
