@@ -25,9 +25,14 @@ app.timer("aggregates", {
 	useMonitor: true
 });
 
+/*
+	EventHub triggered functions must have different consumerGroups, or
+	otherwise they will compete for the same messages.
+ */
 app.eventHub("timescale-writer", {
 	eventHubName: "iothub-ehub-*",
 	connection: "IOT_HUB_EVENTHUB_CONNECTION",
+	consumerGroup: "timescale-writer",
 	cardinality: "many",
 	handler: runTimescaleWriter
 });
@@ -35,6 +40,7 @@ app.eventHub("timescale-writer", {
 app.eventHub("blob-writer", {
 	eventHubName: "iothub-ehub-*",
 	connection: "IOT_HUB_EVENTHUB_CONNECTION",
+	consumerGroup: "blob-writer",
 	cardinality: "many",
 	handler: runBlobWriter
 });
