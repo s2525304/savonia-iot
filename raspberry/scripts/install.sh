@@ -65,10 +65,10 @@ echo "Config    : $CONFIG_PATH"
 # -----------------------------
 # Build (assumes node/npm already installed)
 # -----------------------------
-echo "Installing dependencies and building..."
-cd "$REPO_ROOT"
+echo "Installing dependencies and building (raspberry only)..."
+cd "$REPO_ROOT/raspberry"
 npm ci
-npm run -w raspberry build
+npm run build
 
 # -----------------------------
 # Create runtime directories (best effort)
