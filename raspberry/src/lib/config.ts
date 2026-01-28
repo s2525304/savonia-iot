@@ -84,7 +84,7 @@ function applySensorDefaults(s: SensorConfig, deviceLocation?: string): SensorCo
 }
 
 function getIotHubConnectionFromEnv(): { connectionString: string; deviceId: string } {
-	const connectionString = (process.env.IOT_HUB_CONNECTION ?? "").trim();
+	const connectionString = (process.env.IOT_HUB_CONNECTION_STRING ?? "").trim();
 	if (!connectionString) {
 		throw new Error("IOT_HUB_CONNECTION environment variable is required");
 	}
@@ -92,7 +92,7 @@ function getIotHubConnectionFromEnv(): { connectionString: string; deviceId: str
 	const deviceIdPart = parts.find(p => p.startsWith("DeviceId="));
 	const deviceId = deviceIdPart ? deviceIdPart.substring("DeviceId=".length) : "";
 	if (!deviceId) {
-		throw new Error("IOT_HUB_CONNECTION must contain DeviceId");
+		throw new Error("IOT_HUB_CONNECTION_STRING must contain DeviceId");
 	}
 	return { connectionString, deviceId };
 }
