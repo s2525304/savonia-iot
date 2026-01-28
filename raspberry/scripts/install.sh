@@ -67,9 +67,28 @@ echo "Config    : $CONFIG_PATH"
 # -----------------------------
 echo "Installing dependencies and building..."
 cd "$REPO_ROOT"
-npm ci
-npm run -w common build
-npm run -w raspberry build
+
+# If the repo is a workspace monorepo, use workspaces. Otherwise, fall back to per-package installs.
+if node -e "const p=require('./package.json'); process.exit(p.workspaces ? 0 : 1)"; then
+	echo "Detected npm workspaces at repo root"
+	npm ci
+	npm run -w common build
+	npm run -w raspberry build
+else
+	echo "No npm workspaces detected at repo root; installing/building per package"
+
+	if [[ ! -d "$REPO_ROOT/common" ]]; then
+		echo "ERROR: common package directory not found at $REPO_ROOT/common" >&2
+		exit 1
+	fi
+	if [[ ! -d "$REPO_ROOT/raspberry" ]]; then
+		echo "ERROR: raspberry package directory not found at $REPO_ROOT/raspberry" >&2
+		exit 1
+	fi
+
+	( cd "$REPO_ROOT/common" && npm ci && npm run build )
+	( cd "$REPO_ROOT/raspberry" && npm ci && npm run build )
+fi
 
 # -----------------------------
 # Create runtime directories (best effort)
