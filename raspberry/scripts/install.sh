@@ -47,9 +47,41 @@ if [[ ! -x "$NPM_BIN" ]]; then
 	exit 1
 fi
 
+
 if [[ ! -f "$CONFIG_PATH" ]]; then
 	echo "ERROR: Config not found: $CONFIG_PATH"
 	exit 1
+fi
+
+# -----------------------------
+# Ensure device.location exists in config.json
+# -----------------------------
+# If config is missing device.location, ask for it and write back to config.
+DEVICE_LOCATION="$("$NODE_BIN" -e "
+const fs=require('fs');
+const p=process.argv[1];
+const cfg=JSON.parse(fs.readFileSync(p,'utf8'));
+process.stdout.write((cfg.device && typeof cfg.device.location==='string' && cfg.device.location.trim()) ? cfg.device.location.trim() : '');
+" "$CONFIG_PATH")"
+
+if [[ -z "$DEVICE_LOCATION" ]]; then
+	DEFAULT_LOCATION="Living room"
+	echo "device.location is not set in $CONFIG_PATH"
+	read -r -p "Enter device.location [${DEFAULT_LOCATION}]: " DEVICE_LOCATION
+	DEVICE_LOCATION="${DEVICE_LOCATION:-$DEFAULT_LOCATION}"
+
+	# Persist back to config.json
+	"$NODE_BIN" -e "
+const fs=require('fs');
+const p=process.argv[1];
+const location=process.argv[2];
+const cfg=JSON.parse(fs.readFileSync(p,'utf8'));
+cfg.device = cfg.device && typeof cfg.device === 'object' ? cfg.device : {};
+cfg.device.location = location;
+fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+" "$CONFIG_PATH" "$DEVICE_LOCATION"
+
+	echo "Set device.location=\"$DEVICE_LOCATION\" in $CONFIG_PATH"
 fi
 
 # -----------------------------
