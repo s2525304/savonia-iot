@@ -68,6 +68,7 @@ echo "Config    : $CONFIG_PATH"
 echo "Installing dependencies and building..."
 cd "$REPO_ROOT"
 npm ci
+npm run -w common build
 npm run -w raspberry build
 
 # -----------------------------
