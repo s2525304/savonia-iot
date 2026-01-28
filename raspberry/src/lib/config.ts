@@ -1,3 +1,4 @@
+import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -25,9 +26,13 @@ export interface SensorConfig {
 
 export interface AppConfig {
     device: {
-        deviceId: string;
+        deviceId: string; // derived from IOT_HUB_CONNECTION
         location?: string;
     };
+
+	iotHub: {
+		connectionString: string;
+	};
 
     paths: {
         sqlite: string;
@@ -46,7 +51,7 @@ export interface AppConfig {
 /* ---------- defaults ---------- */
 
 const DEFAULT_SQLITE = "/var/lib/savonia-iot/buffer.sqlite";
-const DEFAULT_LOGDIR = "/var/log/savonia-iot";
+const DEFAULT_LOG_DIR = "/var/log/savonia-iot";
 const DEFAULT_LOG_LEVEL: LogLevel = "info";
 
 function parseCommandLine(): { configPath: string } {
@@ -70,7 +75,7 @@ function ensureDir(p: string): void {
 function applySensorDefaults(s: SensorConfig, deviceLocation?: string): SensorConfig {
 	const out: SensorConfig = { ...s };
 
-	// If not specified, inherit location from device
+	// If not specified, inherit the location from the device
 	if (!out.location && deviceLocation) {
 		out.location = deviceLocation;
 	}
@@ -78,12 +83,29 @@ function applySensorDefaults(s: SensorConfig, deviceLocation?: string): SensorCo
 	return out;
 }
 
+function getIotHubConnectionFromEnv(): { connectionString: string; deviceId: string } {
+	const connectionString = (process.env.IOT_HUB_CONNECTION ?? "").trim();
+	if (!connectionString) {
+		throw new Error("IOT_HUB_CONNECTION environment variable is required");
+	}
+	const parts = connectionString.split(";");
+	const deviceIdPart = parts.find(p => p.startsWith("DeviceId="));
+	const deviceId = deviceIdPart ? deviceIdPart.substring("DeviceId=".length) : "";
+	if (!deviceId) {
+		throw new Error("IOT_HUB_CONNECTION must contain DeviceId");
+	}
+	return { connectionString, deviceId };
+}
+
 /* ---------- validation ---------- */
 
 function validateConfig(cfg: AppConfig): void {
-    if (!cfg.device?.deviceId) {
-        throw new Error("config.device.deviceId is required");
-    }
+	if (!cfg.iotHub?.connectionString?.trim()) {
+		throw new Error("config.iotHub.connectionString is required");
+	}
+	if (!cfg.iotHub.connectionString.includes("DeviceId=")) {
+		throw new Error("config.iotHub.connectionString must contain DeviceId");
+	}
 
 	const allowedLogLevels: ReadonlySet<string> = new Set([
 		"error",
@@ -130,14 +152,19 @@ export function loadConfig(): AppConfig {
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<AppConfig> & { logLevel?: string };
 
+	const { connectionString, deviceId } = getIotHubConnectionFromEnv();
+
     const cfg: AppConfig = {
         device: {
-            deviceId: parsed.device?.deviceId ?? "",
+            deviceId,
             location: parsed.device?.location
         },
+		iotHub: {
+			connectionString
+		},
         paths: {
             sqlite: parsed.paths?.sqlite ?? DEFAULT_SQLITE,
-            logDir: parsed.paths?.logDir ?? DEFAULT_LOGDIR
+            logDir: parsed.paths?.logDir ?? DEFAULT_LOG_DIR
         },
 		logLevel: (parsed as any).logLevel ?? DEFAULT_LOG_LEVEL,
 		transferrer: {

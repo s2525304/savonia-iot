@@ -16,6 +16,7 @@ fi
 
 CONFIG_DEFAULT="$REPO_ROOT_DEFAULT/raspberry/config/config.json"
 SYSTEMD_DIR="/etc/systemd/system"
+ENV_FILE="/var/lib/savonia-iot/.env"
 
 # -----------------------------
 # Args
@@ -38,6 +39,25 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
 	echo "ERROR: Config not found: $CONFIG_PATH"
 	exit 1
 fi
+
+# -----------------------------
+# IoT Hub connection string (.env for systemd services)
+# -----------------------------
+if [[ -z "${IOT_HUB_CONNECTION_STRING:-}" ]]; then
+	echo "IOT_HUB_CONNECTION_STRING is not set in the environment."
+	read -r -s -p "Enter IOT_HUB_CONNECTION_STRING (input hidden): " IOT_HUB_CONNECTION_STRING
+	echo ""
+	if [[ -z "$IOT_HUB_CONNECTION_STRING" ]]; then
+		echo "ERROR: IOT_HUB_CONNECTION_STRING cannot be empty"
+		exit 1
+	fi
+fi
+
+echo "Writing env file: $ENV_FILE"
+sudo mkdir -p "$(dirname "$ENV_FILE")"
+echo "IOT_HUB_CONNECTION_STRING=$IOT_HUB_CONNECTION_STRING" | sudo tee "$ENV_FILE" >/dev/null
+sudo chmod 600 "$ENV_FILE"
+sudo chown pi:pi "$ENV_FILE"
 
 echo "Repo root : $REPO_ROOT"
 echo "Config    : $CONFIG_PATH"
@@ -72,6 +92,14 @@ sudo sed -i "s|^WorkingDirectory=.*$|WorkingDirectory=$REPO_ROOT|" "$SYSTEMD_DIR
 
 sudo sed -i "s|--config .*config.json|--config $CONFIG_PATH|g" "$SYSTEMD_DIR/savonia-iot-transferrer.service"
 sudo sed -i "s|--config .*config.json|--config $CONFIG_PATH|g" "$SYSTEMD_DIR/savonia-iot-sensor@.service"
+
+# Ensure services load environment variables from the shared env file
+for unit in "$SYSTEMD_DIR/savonia-iot-transferrer.service" "$SYSTEMD_DIR/savonia-iot-sensor@.service"; do
+	if ! sudo grep -q "^EnvironmentFile=$ENV_FILE$" "$unit"; then
+		# Insert right after [Service]
+		sudo sed -i "/^\[Service\]/a EnvironmentFile=$ENV_FILE" "$unit"
+	fi
+done
 
 # -----------------------------
 # Generate transferrer timer (start on boot)

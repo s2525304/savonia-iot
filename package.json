@@ -2,7 +2,7 @@
   "name": "savonia-iot",
   "private": true,
   "workspaces": [
-    "azure",
+    "azure/functions",
     "raspberry",
     "packages/*"
   ],

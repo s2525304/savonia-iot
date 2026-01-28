@@ -6,6 +6,9 @@ import { loadConfig } from "./lib/config";
 import { createLogger } from "./lib/log";
 import { deleteMeasurement, fetchUnsentBatch, initDb, markFailed, openDb } from "./lib/sqlite";
 
+import { Client, Message } from "azure-iot-device";
+import { MqttWs } from "azure-iot-device-mqtt";
+
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const ERROR_BACKOFF_MS = 1_000;
 
@@ -13,11 +16,93 @@ function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function sendToIoTHubDummy(logger: winston.Logger, msg: TelemetryMessageValidated): Promise<void> {
-	// Dummy sender: always succeeds
-	// Later: publish MQTT message to Azure IoT Hub
-	logger.info("(dummy) would send telemetry: %s", JSON.stringify(msg));
-	return;
+type IoTHubSender = {
+	send: (msg: TelemetryMessageValidated) => Promise<void>;
+	close: () => Promise<void>;
+};
+
+function getIoTHubConnectionString(config: unknown): string {
+	const cs = (config as { iotHub?: { connectionString?: string } })?.iotHub?.connectionString?.trim() ?? "";
+	if (!cs) {
+		throw new Error("IoT Hub connection string missing in config (iotHub.connectionString)");
+	}
+	if (!cs.includes("DeviceId=")) {
+		throw new Error("IoT Hub connection string must contain DeviceId");
+	}
+	return cs;
+}
+
+function createIoTHubSender(logger: winston.Logger, connectionString: string): IoTHubSender {
+	const client = Client.fromConnectionString(connectionString, MqttWs);
+	logger.info("IoT Hub client created (transport=MqttWs)");
+
+	let opened = false;
+	let opening: Promise<void> | null = null;
+
+	const openOnce = async (): Promise<void> => {
+		if (opened) return;
+		if (opening) return opening;
+
+		opening = new Promise<void>((resolve, reject) => {
+			logger.debug("Opening IoT Hub connection...");
+			client.open(err => {
+				opening = null;
+				if (err) {
+					logger.error("IoT Hub connection failed: %s", err.message);
+					return reject(err);
+				}
+				logger.info("IoT Hub connection opened");
+				opened = true;
+				resolve();
+			});
+		});
+
+		return opening;
+	};
+
+	const close = async (): Promise<void> => {
+		if (!opened) return;
+		logger.debug("Closing IoT Hub connection");
+		await new Promise<void>(resolve => {
+			client.close(() => resolve());
+		});
+		opened = false;
+		opening = null;
+	};
+
+	const send = async (msg: TelemetryMessageValidated): Promise<void> => {
+		await openOnce();
+
+		const body = JSON.stringify(msg);
+		const m = new Message(body);
+		m.contentType = "application/json";
+		m.contentEncoding = "utf-8";
+		// Helpful for troubleshooting / idempotency on the cloud side.
+		m.messageId = `${msg.deviceId}:${msg.sensorId}:${msg.seq}`;
+
+		logger.debug(
+			"Sending telemetry to IoT Hub (deviceId=%s sensorId=%s seq=%d)",
+			msg.deviceId,
+			msg.sensorId,
+			msg.seq
+		);
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				client.sendEvent(m, err => {
+					if (err) return reject(err);
+					resolve();
+				});
+			});
+		} catch (err) {
+			// Force reconnection on the next attempt.
+			logger.warn("IoT Hub send failed; will reconnect on next attempt: %s", err instanceof Error ? err.message : String(err));
+			await close();
+			throw err;
+		}
+	};
+
+	return { send, close };
 }
 
 function parseTelemetryMessage(payloadJson: string): TelemetryMessageValidated {
@@ -46,7 +131,8 @@ async function main(): Promise<void> {
 
 	const logger: winston.Logger = createLogger({
 		logDir: config.paths.logDir,
-		serviceName: "measurement-transferrer"
+		serviceName: "measurement-transferrer",
+		level: config.logLevel
 	});
 
 	const pollIntervalMs = config.transferrer?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -58,6 +144,9 @@ async function main(): Promise<void> {
 
 	const handle = openDb(config.paths.sqlite);
 	initDb(handle.db);
+
+	const connectionString = getIoTHubConnectionString(config);
+	const sender = createIoTHubSender(logger, connectionString);
 
 	let running = true;
 	const stopGraceful = (signal: string) => {
@@ -87,7 +176,7 @@ async function main(): Promise<void> {
 
 			try {
 				const msg = parseTelemetryMessage(row.payloadJson);
-				await sendToIoTHubDummy(logger, msg);
+				await sender.send(msg);
 
 				// Success: delete measurement from the local buffer
 				deleteMeasurement(handle.db, row.id);
@@ -102,6 +191,7 @@ async function main(): Promise<void> {
 			}
 		}
 	} finally {
+		await sender.close();
 		handle.close();
 		logger.info("Measurement transferrer exiting");
 	}
