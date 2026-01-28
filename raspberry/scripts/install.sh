@@ -19,6 +19,12 @@ SYSTEMD_DIR="/etc/systemd/system"
 ENV_FILE="/var/lib/savonia-iot/.env"
 
 # -----------------------------
+# Use system-wide Node/NPM consistently (systemd runs /usr/bin/node)
+# -----------------------------
+NODE_BIN="/usr/bin/node"
+NPM_BIN="/usr/bin/npm"
+
+# -----------------------------
 # Args
 # -----------------------------
 REPO_ROOT="${1:-$REPO_ROOT_DEFAULT}"
@@ -29,9 +35,15 @@ if [[ ! -d "$REPO_ROOT" ]]; then
 	exit 1
 fi
 
-if [[ ! -x "/usr/bin/node" ]]; then
-	echo "ERROR: /usr/bin/node not found. Install Node.js system-wide (NodeSource recommended) so systemd can run services." >&2
+if [[ ! -x "$NODE_BIN" ]]; then
+	echo "ERROR: $NODE_BIN not found. Install Node.js system-wide (NodeSource recommended) so systemd can run services." >&2
 	echo "Try: sudo apt install -y nodejs" >&2
+	exit 1
+fi
+
+if [[ ! -x "$NPM_BIN" ]]; then
+	echo "ERROR: $NPM_BIN not found. Install npm (often included with nodejs) so the installer can run npm ci/build." >&2
+	echo "Try: sudo apt install -y npm" >&2
 	exit 1
 fi
 
@@ -43,8 +55,16 @@ fi
 # -----------------------------
 # IoT Hub connection string (.env for systemd services)
 # -----------------------------
+# If already set in environment, use it.
+# Otherwise, try to load from existing env file.
+if [[ -z "${IOT_HUB_CONNECTION_STRING:-}" && -f "$ENV_FILE" ]]; then
+	# shellcheck disable=SC1090
+	source "$ENV_FILE"
+fi
+
+# Prompt only if still missing
 if [[ -z "${IOT_HUB_CONNECTION_STRING:-}" ]]; then
-	echo "IOT_HUB_CONNECTION_STRING is not set in the environment."
+	echo "IOT_HUB_CONNECTION_STRING is not set."
 	read -r -s -p "Enter IOT_HUB_CONNECTION_STRING (input hidden): " IOT_HUB_CONNECTION_STRING
 	echo ""
 	if [[ -z "$IOT_HUB_CONNECTION_STRING" ]]; then
@@ -67,11 +87,17 @@ echo "Config    : $CONFIG_PATH"
 # -----------------------------
 echo "Installing dependencies and building..."
 cd "$REPO_ROOT"
-npm ci
+
+# Ensure we use the same Node as systemd (/usr/bin/node)
+echo "Using Node: $($NODE_BIN -v) ($(command -v "$NODE_BIN"))"
+echo "Using npm : $($NPM_BIN -v) ($(command -v "$NPM_BIN"))"
+
+# Run npm with a PATH that prefers /usr/bin so native deps compile for the same Node ABI
+PATH="/usr/bin:$PATH" "$NPM_BIN" ci
 
 # Build workspace packages by their package.json "name" values
-npm run -w @savonia-iot/common build
-npm run -w @savonia-iot/raspberry build
+PATH="/usr/bin:$PATH" "$NPM_BIN" run -w @savonia-iot/common build
+PATH="/usr/bin:$PATH" "$NPM_BIN" run -w @savonia-iot/raspberry build
 
 # -----------------------------
 # Create runtime directories (best effort)
@@ -126,7 +152,7 @@ EOF
 # -----------------------------
 echo "Generating per-sensor timers from config..."
 
-SENSOR_LIST_JSON="$(node -e "
+SENSOR_LIST_JSON="$("$NODE_BIN" -e "
 const fs=require('fs');
 const cfg=JSON.parse(fs.readFileSync('$CONFIG_PATH','utf8'));
 if(!cfg.sensors || !Array.isArray(cfg.sensors)) { process.exit(2); }
@@ -145,7 +171,7 @@ echo "Removing old generated sensor timer units..."
 sudo rm -f "$SYSTEMD_DIR/savonia-iot-sensor-"*.timer
 
 # Create a timer for each sensorId
-node -e "
+"$NODE_BIN" -e "
 const sensors = JSON.parse(process.argv[1]);
 for (const s of sensors) {
 	if (!s.sensorId) throw new Error('sensorId missing');
