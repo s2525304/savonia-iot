@@ -3,6 +3,10 @@ import { loadConfig } from "./shared/config";
 import { runAggregates } from "./functions/aggregates";
 import { runTimescaleWriter } from "./functions/timescale-writer";
 import { runBlobWriter } from "./functions/blob-writer";
+import { getDevices } from "./functions/http/devices.get";
+import { getSensors } from "./functions/http/sensors.get";
+import { getMeasurements } from "./functions/http/measurements.get";
+import { getHourly } from "./functions/http/hourly.get";
 
 function getSchedule(): string {
 	// Try to read schedule from env; fallback keeps host alive even if env missing.
@@ -43,4 +47,32 @@ app.eventHub("blob-writer", {
 	consumerGroup: "blob-writer",
 	cardinality: "many",
 	handler: runBlobWriter
+});
+
+app.http("devices-get", {
+	methods: ["GET"],
+	authLevel: "anonymous",
+	route: "devices",
+	handler: getDevices
+});
+
+app.http("sensors-get", {
+    methods: ["GET"],
+    authLevel: "anonymous",
+    route: "devices/{deviceId}/sensors",
+    handler: getSensors
+});
+
+app.http("measurements-get", {
+    methods: ["GET"],
+    authLevel: "anonymous",
+    route: "devices/{deviceId}/sensors/{sensorId}/measurements",
+    handler: getMeasurements
+});
+
+app.http("hourly-get", {
+    methods: ["GET"],
+    authLevel: "anonymous",
+    route: "devices/{deviceId}/sensors/{sensorId}/hourly",
+    handler: getHourly
 });

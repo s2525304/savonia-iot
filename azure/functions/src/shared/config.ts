@@ -12,6 +12,10 @@ export interface AggregatesConfig {
 	refreshCron: string;
 }
 
+export interface HttpAuthConfig {
+	apiKey: string;
+}
+
 export interface BlobWriterConfig {
 	connectionString: string;
 	container: string;
@@ -24,6 +28,7 @@ export interface AppConfig {
 	timescale: TimescaleConfig;
 	aggregates: AggregatesConfig;
 	blobWriter: BlobWriterConfig;
+	httpAuth: HttpAuthConfig;
 }
 
 function requireEnv(name: string): string {
@@ -75,6 +80,9 @@ export function loadConfig(): AppConfig {
 				"Hot" | "Cool" | "Cold" | "Archive",
 			gzip: optionalBooleanEnv("BLOB_GZIP", true),
 			prefix: optionalStringEnv("BLOB_PREFIX", "telemetry")
+		},
+		httpAuth: {
+			apiKey: requireEnv("HTTP_API_KEY")
 		}
 	};
 }

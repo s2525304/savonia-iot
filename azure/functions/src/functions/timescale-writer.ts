@@ -1,93 +1,16 @@
 import type { InvocationContext } from "@azure/functions";
-import { z } from "zod";
-
 import { query } from "../shared/db";
 import { createLogger } from "../shared/log";
-
-// NOTE:
-// This function is intended to be used as the handler for an IoT Hub/Event Hub trigger.
-// It accepts either a single message or a batch (array) of messages.
+import { parseTelemetryBatch } from "../shared/iothub/parseTelemetry";
+import type { TelemetryMessage } from "../shared/iothub/telemetry";
 
 export interface TimescaleWriterResult {
 	inserted: number;
 	failed: number;
 }
 
-const TelemetrySchema = z.object({
-	schemaVersion: z.literal(1),
-	deviceId: z.string(),
-	sensorId: z.string(),
-	ts: z.string(),
-	seq: z.number().int().nonnegative(),
-	type: z.string(),
-	valueType: z.enum(["number", "boolean", "string", "enum"]),
-	value: z.union([z.number(), z.boolean(), z.string()]),
-	unit: z.string().optional(),
-	location: z.string().optional()
-});
-
-// Helper: normalize unknown event hub payload to an array of unknown messages
-function normalizeBatch(event: unknown): unknown[] {
-	if (Array.isArray(event)) {
-		return event;
-	}
-	return [event];
-}
-
-// Helper: try to parse an Event Hub message into a JS object
-// Event Hub trigger can deliver:
-// - already-parsed object
-// - string
-// - Buffer/Uint8Array
-function parseBodyToObject(body: unknown): unknown {
-	if (body == null) return body;
-
-	// If it's already an object (most common in local tests)
-	if (typeof body === "object" && !Buffer.isBuffer(body) && !(body instanceof Uint8Array)) {
-		return body;
-	}
-
-	if (typeof body === "string") {
-		try {
-			return JSON.parse(body);
-		} catch {
-			return body;
-		}
-	}
-
-	// Buffer or Uint8Array
-	if (Buffer.isBuffer(body)) {
-		const s = body.toString("utf8");
-		try {
-			return JSON.parse(s);
-		} catch {
-			return s;
-		}
-	}
-	if (body instanceof Uint8Array) {
-		const s = Buffer.from(body).toString("utf8");
-		try {
-			return JSON.parse(s);
-		} catch {
-			return s;
-		}
-	}
-
-	return body;
-}
-
 // Map telemetry message to DB columns
-function mapTelemetryToDb(msg: {
-	deviceId: string;
-	sensorId: string;
-	ts: string;
-	seq: number;
-	type: string;
-	unit?: string;
-	location?: string;
-	valueType: "number" | "boolean" | "enum" | "string";
-	value: unknown;
-}): {
+function mapTelemetryToDb(msg: TelemetryMessage): {
 	device_id: string;
 	sensor_id: string;
 	ts: string;
@@ -189,41 +112,16 @@ async function insertTelemetryRow(row: ReturnType<typeof mapTelemetryToDb>): Pro
 export async function runTimescaleWriter(event: unknown, context: InvocationContext): Promise<TimescaleWriterResult> {
 	const logger = createLogger(context);
 
-	const batch = normalizeBatch(event);
-	logger.info(`timescale-writer: received ${batch.length} event(s)`);
+	const { ok, bad } = parseTelemetryBatch(event, context);
+	logger.info(`timescale-writer: received ${Array.isArray(event) ? event.length : 1} event(s)`);
+	logger.info(`timescale-writer: validated ${ok.length} telemetry message(s), failed ${bad.length}`);
 
 	let inserted = 0;
-	let failed = 0;
+	let failed = bad.length;
 
-	for (const item of batch) {
+	for (const msg of ok) {
 		try {
-			const obj = parseBodyToObject(item);
-
-			// Validate + normalize
-			const parsed = TelemetrySchema.safeParse(obj);
-			if (!parsed.success) {
-				failed++;
-				// Keep validation logs at debug to avoid log spam
-				const issues = parsed.error.issues
-					.map(issue => `${issue.path.map(p => String(p)).join(".") || "<root>"}: ${issue.message}`)
-					.join("; ");
-				logger.debug(`timescale-writer: telemetry validation failed: ${issues}`);
-				continue;
-			}
-
-			const msg = parsed.data;
-			const row = mapTelemetryToDb({
-				deviceId: msg.deviceId,
-				sensorId: msg.sensorId,
-				ts: msg.ts,
-				seq: msg.seq,
-				type: msg.type,
-				unit: msg.unit,
-				location: msg.location,
-				valueType: msg.valueType,
-				value: msg.value
-			});
-
+			const row = mapTelemetryToDb(msg);
 			await insertTelemetryRow(row);
 			inserted++;
 

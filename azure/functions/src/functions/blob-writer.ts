@@ -5,6 +5,8 @@ import { gzipSync } from "zlib";
 
 import { createLogger } from "../shared/log";
 import { loadConfig } from "../shared/config";
+import { parseTelemetryBatch } from "../shared/iothub/parseTelemetry";
+import type { TelemetryMessage } from "../shared/iothub/telemetry";
 
 // We store IoT Hub telemetry events into a cold-storage blob container as JSONL (optionally gzipped).
 //
@@ -29,19 +31,6 @@ import { loadConfig } from "../shared/config";
 // - COLD_STORAGE_GZIP (optional: true|false, default: true)
 // - COLD_STORAGE_PREFIX (optional, default: telemetry)
 
-export interface TelemetryMessageV1 {
-	schemaVersion: 1;
-	deviceId: string;
-	sensorId: string;
-	ts: string;
-	seq: number;
-	type: string;
-	valueType: "number" | "boolean" | "string" | "enum";
-	value: number | boolean | string;
-	unit?: string;
-	location?: string;
-}
-
 function mapTier(tier: "Hot" | "Cool" | "Cold" | "Archive"): BlockBlobTier {
 	switch (tier) {
 		case "Hot": return BlockBlobTier.Hot;
@@ -49,34 +38,6 @@ function mapTier(tier: "Hot" | "Cool" | "Cold" | "Archive"): BlockBlobTier {
 		case "Cold": return BlockBlobTier.Cold;
 		case "Archive": return BlockBlobTier.Archive;
 	}
-}
-
-function safeJsonParse(input: string): unknown {
-	try {
-		return JSON.parse(input);
-	} catch {
-		return undefined;
-	}
-}
-
-function extractEventBody(event: unknown): string | undefined {
-	// Azure Event Hub trigger can deliver:
-	// - string
-	// - Buffer
-	// - object with a `body` field
-	if (typeof event === "string") return event;
-	if (Buffer.isBuffer(event)) return event.toString("utf8");
-
-	if (event && typeof event === "object") {
-		const anyEvent = event as { body?: unknown };
-		const body = anyEvent.body;
-		if (typeof body === "string") return body;
-		if (Buffer.isBuffer(body)) return body.toString("utf8");
-		// Sometimes the body is already parsed JSON
-		if (body && typeof body === "object") return JSON.stringify(body);
-	}
-
-	return undefined;
 }
 
 function datePathParts(tsIso: string): { yyyy: string; mm: string; dd: string; hh: string } {
@@ -98,6 +59,8 @@ function sanitizePathPart(v: string): string {
 }
 
 let blobClient: BlobServiceClient | null = null;
+let containerClient: ReturnType<BlobServiceClient["getContainerClient"]> | null = null;
+let containerEnsured = false;
 
 function getBlobServiceClient(): BlobServiceClient {
 	if (!blobClient) {
@@ -109,7 +72,24 @@ function getBlobServiceClient(): BlobServiceClient {
 	return blobClient;
 }
 
-export async function runBlobWriter(events: unknown[], context: InvocationContext): Promise<void> {
+async function getContainerClient(): Promise<ReturnType<BlobServiceClient["getContainerClient"]>> {
+	const cfg = loadConfig().blobWriter;
+
+	if (!containerClient) {
+		const svc = getBlobServiceClient();
+		containerClient = svc.getContainerClient(cfg.container);
+	}
+
+	// Avoid doing an existence check on every invocation. This reduces storage read ops.
+	if (!containerEnsured) {
+		await containerClient.createIfNotExists();
+		containerEnsured = true;
+	}
+
+	return containerClient;
+}
+
+export async function runBlobWriter(events: unknown, context: InvocationContext): Promise<void> {
 	const log = createLogger(context);
 
 	const cfg = loadConfig().blobWriter;
@@ -119,59 +99,26 @@ export async function runBlobWriter(events: unknown[], context: InvocationContex
 	const prefix = cfg.prefix;
 	const tier = mapTier(cfg.tier);
 
-	if (!Array.isArray(events) || events.length === 0) {
+	if (events == null || (Array.isArray(events) && events.length === 0)) {
 		log.debug("blob-writer: no events");
 		return;
 	}
 
-	const svc = getBlobServiceClient();
-	const container = svc.getContainerClient(containerName);
-	await container.createIfNotExists();
+	const container = await getContainerClient();
 
-	let parsedOk = 0;
-	let parsedBad = 0;
-	const messages: TelemetryMessageV1[] = [];
-
-	for (const ev of events) {
-		const bodyStr = extractEventBody(ev);
-		if (!bodyStr) {
-			parsedBad++;
-			continue;
-		}
-
-		const obj = safeJsonParse(bodyStr);
-		if (!obj || typeof obj !== "object") {
-			parsedBad++;
-			continue;
-		}
-
-		// Minimal validation (avoid heavy deps in a cold-path ingestion function).
-		const m = obj as Partial<TelemetryMessageV1>;
-		if (
-			m.schemaVersion !== 1 ||
-			typeof m.deviceId !== "string" ||
-			typeof m.sensorId !== "string" ||
-			typeof m.ts !== "string" ||
-			typeof m.seq !== "number" ||
-			typeof m.type !== "string" ||
-			(m.valueType !== "number" && m.valueType !== "boolean" && m.valueType !== "string" && m.valueType !== "enum")
-		) {
-			parsedBad++;
-			continue;
-		}
-
-		messages.push(m as TelemetryMessageV1);
-		parsedOk++;
-	}
+	const parsed = parseTelemetryBatch(events, context);
+	const messages: TelemetryMessage[] = parsed.ok;
+	const parsedOk = parsed.ok.length;
+	const parsedBad = parsed.bad.length;
 
 	if (messages.length === 0) {
-		log.info("blob-writer: nothing to write", { parsedBad });
+		log.info("blob-writer: nothing to write", { parsedOk, parsedBad });
 		return;
 	}
 
 	// Partition by hour based on event timestamp (UTC) to keep files reasonably sized.
 	// Also split by deviceId to avoid hot blobs when many devices send concurrently.
-	const byPartition = new Map<string, TelemetryMessageV1[]>();
+	const byPartition = new Map<string, TelemetryMessage[]>();
 	for (const m of messages) {
 		const { yyyy, mm, dd, hh } = datePathParts(m.ts);
 		const device = sanitizePathPart(m.deviceId);
@@ -211,7 +158,7 @@ export async function runBlobWriter(events: unknown[], context: InvocationContex
 	}
 
 	log.info("blob-writer: done", {
-		received: events.length,
+		received: Array.isArray(events) ? events.length : 1,
 		parsedOk,
 		parsedBad,
 		uploaded,
