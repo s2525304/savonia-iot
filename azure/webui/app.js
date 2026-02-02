@@ -44,11 +44,7 @@
 	const sensorSelect = document.getElementById("sensor-select");
 
 	async function loadDevices() {
-		const res = await fetch("/api/devices", {
-			headers: {
-				"x-api-key": x_api_key
-			}
-		});
+		const res = await fetch(`/api/devices?code=${encodeURIComponent(x_api_key)}`);
 		if (!res.ok) {
 			console.error("Failed to load devices");
 			return;
@@ -69,11 +65,7 @@
 		sensorSelect.disabled = true;
 		sensorSelect.innerHTML = "<option value=''>Loading…</option>";
 
-		const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/sensors`, {
-			headers: {
-				"x-api-key": x_api_key
-			}
-		});
+		const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/sensors?code=${encodeURIComponent(x_api_key)}`);
 		if (!res.ok) {
 			console.error("Failed to load sensors");
 			return;
