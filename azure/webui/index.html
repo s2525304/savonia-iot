@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Savonia IoT</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<h1>Savonia IoT</h1>
+
+<div id="auth-status">Checking login…</div>
+
+<div id="app" hidden>
+  <select id="device"></select>
+  <select id="sensor"></select>
+  <input type="date" id="from">
+  <input type="date" id="to">
+  <button id="load">Load</button>
+  <button id="csv">Download CSV</button>
+
+  <canvas id="chart"></canvas>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
