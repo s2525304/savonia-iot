@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../azure.env"
 
+
 require_var() {
 	local name="$1"
 	if [[ -z "${!name:-}" ]]; then
@@ -17,6 +18,128 @@ require_var() {
 		exit 1
 	fi
 }
+
+# ------------------------------------------------------------------------------
+# Tooling preflight (fail fast)
+# ------------------------------------------------------------------------------
+
+require_cmd() {
+	local cmd="$1"
+	local install_hint="$2"
+	if ! command -v "$cmd" >/dev/null 2>&1; then
+		echo "ERROR: Required tool '$cmd' is not installed or not on PATH."
+		echo "$install_hint"
+		exit 1
+	fi
+}
+
+# Azure CLI
+require_cmd "az" "Install Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
+
+
+# Python 3 (used to update local.settings.json)
+require_cmd "python3" "Install Python 3: https://www.python.org/downloads/ (or via Homebrew: brew install python)"
+
+# zip (used to deploy Function App code via zipdeploy)
+require_cmd "zip" "Install zip (macOS: brew install zip; Ubuntu/Debian: sudo apt-get install zip)"
+
+# Required by the Postgres firewall rule helper below
+# (we use curl primarily; dig is accepted as a fallback)
+if ! command -v curl >/dev/null 2>&1 && ! command -v dig >/dev/null 2>&1; then
+	echo "ERROR: Either 'curl' or 'dig' is required to detect your current public IP (for Postgres firewall rule)."
+	echo "Install curl (recommended): https://curl.se/download.html"
+	echo "Or install dig via dnsutils/bind-tools (e.g. on macOS: brew install bind)"
+	exit 1
+fi
+
+# Sanity-check Azure CLI can actually run
+if ! az version >/dev/null 2>&1; then
+	echo "ERROR: Azure CLI is installed but failed to run 'az version'."
+	echo "Try reinstalling Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli"
+	exit 1
+fi
+
+# Optional but helpful: fail fast if not logged in
+if ! az account show >/dev/null 2>&1; then
+	echo "ERROR: Not logged in to Azure CLI."
+	echo "Run: az login"
+	exit 1
+fi
+
+# Optional but helpful: ensure the expected subscription is at least visible
+# (This avoids failing later after provisioning work.)
+if ! az account list --query "[?id=='${AZURE_SUBSCRIPTION_ID}'].id" -o tsv 2>/dev/null | grep -q "${AZURE_SUBSCRIPTION_ID}"; then
+	echo "ERROR: AZURE_SUBSCRIPTION_ID '${AZURE_SUBSCRIPTION_ID}' was not found in 'az account list'."
+	echo "Verify you are logged in to the correct tenant/subscription, then re-run: az login"
+	exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# Validate all required env vars early (fail fast)
+# ------------------------------------------------------------------------------
+
+# Azure / general
+require_var AZURE_SUBSCRIPTION_ID
+require_var AZURE_LOCATION
+require_var AZURE_RESOURCE_GROUP
+
+# IoT Hub
+require_var IOTHUB_NAME
+require_var IOTHUB_SKU
+require_var IOTHUB_UNITS
+
+# Event Hub
+require_var EVENTHUB_NAMESPACE
+require_var EVENTHUB_NAME
+require_var EVENTHUB_SKU
+require_var EVENTHUB_PARTITIONS
+require_var EVENTHUB_CONSUMERGROUP_INGEST
+require_var EVENTHUB_CONSUMERGROUP_EXTRA
+
+# Storage / Function App
+require_var FUNCTIONAPP_STORAGE_ACCOUNT
+require_var FUNCTIONAPP_NAME
+require_var FUNCTIONAPP_NODE_VERSION
+require_var FUNCTIONAPP_FUNCTIONS_VERSION
+# Cold storage (Blob)
+require_var COLD_CONTAINER
+# Optional cold storage settings
+COLD_PREFIX="${COLD_PREFIX:-telemetry}"
+COLD_GZIP="${COLD_GZIP:-false}"
+
+# Queues
+require_var QUEUE_BLOB_BATCH
+require_var QUEUE_ALERTS
+require_var QUEUE_DB_WRITE
+
+# Timescale / PostgreSQL
+require_var POSTGRES_TIER
+require_var POSTGRES_HOST
+require_var POSTGRES_PORT
+require_var POSTGRES_DATABASE
+require_var POSTGRES_USER
+require_var POSTGRES_PASSWORD
+require_var POSTGRES_SSLMODE
+require_var POSTGRES_LOCATION
+require_var POSTGRES_VERSION
+require_var TIMESCALE_RETENTION_DAYS
+
+# HTTP API
+require_var HTTP_API_KEY
+
+# Extra safety: prevent accidentally deploying with placeholder password
+if [[ "$POSTGRES_PASSWORD" == "CHANGE_ME" ]]; then
+	echo "ERROR: POSTGRES_PASSWORD is set to 'CHANGE_ME'."
+	echo "Please set a real password in azure.env before running this script."
+	exit 1
+fi
+
+# Extra safety: prevent accidentally deploying with placeholder HTTP API key
+if [[ "$HTTP_API_KEY" == "CHANGE_ME" ]]; then
+	echo "ERROR: HTTP_API_KEY is set to 'CHANGE_ME'."
+	echo "Please set a real key in azure.env before running this script."
+	exit 1
+fi
 
 echo "============================================================"
 echo "Azure infrastructure bootstrap"
@@ -27,12 +150,6 @@ echo "Resource grp : $AZURE_RESOURCE_GROUP"
 echo "============================================================"
 echo
 
-# Ensure Azure CLI is logged in
-if ! az account show >/dev/null 2>&1; then
-	echo "Not logged in to Azure CLI."
-	echo "Run: az login"
-	exit 1
-fi
 
 
 # Select subscription
@@ -324,16 +441,6 @@ fi
 echo
 
 # ----------------- TimescaleDB / PostgreSQL (Azure Flexible Server) -----------------
-require_var POSTGRES_TIER
-require_var POSTGRES_HOST
-require_var POSTGRES_PORT
-require_var POSTGRES_DATABASE
-require_var POSTGRES_USER
-require_var POSTGRES_PASSWORD
-require_var POSTGRES_SSLMODE
-require_var POSTGRES_LOCATION
-require_var POSTGRES_VERSION
-require_var TIMESCALE_RETENTION_DAYS
 
 echo
 
@@ -577,8 +684,8 @@ echo "Storage acct : $FUNCTIONAPP_STORAGE_ACCOUNT"
 echo "Function App : $FUNCTIONAPP_NAME"
 echo "Node         : $FUNCTIONAPP_NODE_VERSION"
 echo "Functions    : v$FUNCTIONAPP_FUNCTIONS_VERSION"
-echo "Container    : $BLOB_CONTAINER"
-echo "Queues       : $QUEUE_BLOB_BATCH , $QUEUE_ALERTS"
+echo "Cold container: $COLD_CONTAINER"
+echo "Queues       : $QUEUE_BLOB_BATCH , $QUEUE_ALERTS , $QUEUE_DB_WRITE"
 echo "------------------------------------------------------------"
 
 # Ensure Storage resource provider is registered (one-time per subscription)
@@ -661,14 +768,15 @@ STORAGE_CONNECTION_STRING="$(az storage account show-connection-string \
 	--resource-group "$AZURE_RESOURCE_GROUP" \
 	--query connectionString -o tsv)"
 
-# Blob container (idempotent)
+# Cold storage container (idempotent)
 az storage container create \
-	--name "$BLOB_CONTAINER" \
+	--name "$COLD_CONTAINER" \
 	--connection-string "$STORAGE_CONNECTION_STRING" >/dev/null
 
 # Queues (idempotent)
 az storage queue create --name "$QUEUE_BLOB_BATCH" --connection-string "$STORAGE_CONNECTION_STRING" >/dev/null
 az storage queue create --name "$QUEUE_ALERTS" --connection-string "$STORAGE_CONNECTION_STRING" >/dev/null
+az storage queue create --name "$QUEUE_DB_WRITE" --connection-string "$STORAGE_CONNECTION_STRING" >/dev/null
 
 # Function App
 if az functionapp show --name "$FUNCTIONAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
@@ -698,17 +806,193 @@ az functionapp config appsettings set \
 	--resource-group "$AZURE_RESOURCE_GROUP" \
 	--settings \
 	"AzureWebJobsStorage=$STORAGE_CONNECTION_STRING" \
+	"HTTP_API_KEY=$HTTP_API_KEY" \
 	"EVENTHUB_CONNECTION_STRING=$EVENTHUB_CONNECTION_STRING" \
 	"EVENTHUB_NAME=$EVENTHUB_NAME" \
 	"EVENTHUB_CONSUMERGROUP=$EVENTHUB_CONSUMERGROUP_INGEST" \
 	"QUEUE_BLOB_BATCH=$QUEUE_BLOB_BATCH" \
 	"QUEUE_ALERTS=$QUEUE_ALERTS" \
-	"BLOB_CONTAINER=$BLOB_CONTAINER" \
-	"TIMESCALE_CONNECTION_STRING=$TIMESCALE_CONNECTION_STRING" \
+	"QUEUE_DB_WRITE=$QUEUE_DB_WRITE" \
+	"COLD_STORAGE_CONNECTION_STRING=$STORAGE_CONNECTION_STRING" \
+	"COLD_CONTAINER=$COLD_CONTAINER" \
+	"COLD_PREFIX=$COLD_PREFIX" \
+	"COLD_GZIP=$COLD_GZIP" \
+	"POSTGRES_HOST=$POSTGRES_HOST" \
+	"POSTGRES_PORT=$POSTGRES_PORT" \
+	"POSTGRES_DATABASE=$POSTGRES_DATABASE" \
+	"POSTGRES_USER=$POSTGRES_USER" \
+	"POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
+	"POSTGRES_SSLMODE=$POSTGRES_SSLMODE" \
 	"TIMESCALE_RETENTION_DAYS=$TIMESCALE_RETENTION_DAYS" \
 	>/dev/null
 
+
 echo "Function App configuration applied."
+
+echo
+
+echo "------------------------------------------------------------"
+echo "Deploy Function App code"
+echo "Source dir   : $SCRIPT_DIR/../functions"
+echo "Remote build : enabled (Oryx)"
+echo "------------------------------------------------------------"
+
+FUNCTIONS_CODE_DIR="$SCRIPT_DIR/../functions"
+
+if [[ ! -d "$FUNCTIONS_CODE_DIR" ]]; then
+	echo "ERROR: Function App code directory not found: $FUNCTIONS_CODE_DIR"
+	echo "Expected the Function App source under ../functions relative to this script."
+	exit 1
+fi
+
+if [[ ! -f "$FUNCTIONS_CODE_DIR/host.json" ]]; then
+	echo "ERROR: host.json not found under: $FUNCTIONS_CODE_DIR"
+	echo "This does not look like an Azure Functions app root."
+	exit 1
+fi
+
+# Enable remote build (Oryx) on deployment
+# NOTE: These settings are required for zipdeploy remote builds on Linux Function Apps.
+az functionapp config appsettings set \
+	--name "$FUNCTIONAPP_NAME" \
+	--resource-group "$AZURE_RESOURCE_GROUP" \
+	--settings \
+	"SCM_DO_BUILD_DURING_DEPLOYMENT=1" \
+	"ENABLE_ORYX_BUILD=1" \
+	>/dev/null
+
+# Create a deployment zip (exclude local-only and heavy folders)
+DEPLOY_ZIP="${SCRIPT_DIR}/.functionapp-deploy.zip"
+rm -f "$DEPLOY_ZIP"
+
+(
+	cd "$FUNCTIONS_CODE_DIR"
+	# Exclusions:
+	# - node_modules (remote build restores)
+	# - local.settings.json (local dev)
+	# - git metadata and OS cruft
+	zip -r "$DEPLOY_ZIP" . \
+		-x "node_modules/*" \
+		-x ".git/*" \
+		-x "local.settings.json" \
+		-x "**/*.log" \
+		-x "**/.DS_Store" \
+		>/dev/null
+)
+
+# Deploy with zipdeploy. Prefer --build-remote if supported by this az version.
+# If not supported, the SCM_DO_BUILD_DURING_DEPLOYMENT/ENABLE_ORYX_BUILD settings above will still trigger remote build.
+set +e
+az functionapp deployment source config-zip \
+	--name "$FUNCTIONAPP_NAME" \
+	--resource-group "$AZURE_RESOURCE_GROUP" \
+	--src "$DEPLOY_ZIP" \
+	--build-remote true \
+	>/dev/null
+zipdeploy_rc=$?
+set -e
+
+if [[ $zipdeploy_rc -ne 0 ]]; then
+	echo "NOTE: 'az functionapp deployment source config-zip --build-remote' failed (older az?). Retrying without --build-remote..."
+	az functionapp deployment source config-zip \
+		--name "$FUNCTIONAPP_NAME" \
+		--resource-group "$AZURE_RESOURCE_GROUP" \
+		--src "$DEPLOY_ZIP" \
+		>/dev/null
+fi
+
+rm -f "$DEPLOY_ZIP"
+
+echo "Function App deployment triggered."
+
+#
+# ------------------------------------------------------------------------------
+# Local development: write/merge required settings into ../functions/local.settings.json
+# ------------------------------------------------------------------------------
+LOCAL_SETTINGS_DIR="$SCRIPT_DIR/../functions"
+LOCAL_SETTINGS_FILE="$LOCAL_SETTINGS_DIR/local.settings.json"
+
+mkdir -p "$LOCAL_SETTINGS_DIR"
+
+COLD_STORAGE_CONNECTION_STRING="$STORAGE_CONNECTION_STRING"
+export LOCAL_SETTINGS_FILE HTTP_API_KEY STORAGE_CONNECTION_STRING EVENTHUB_CONNECTION_STRING EVENTHUB_NAME EVENTHUB_CONSUMERGROUP_INGEST \
+	QUEUE_BLOB_BATCH QUEUE_ALERTS QUEUE_DB_WRITE \
+	COLD_STORAGE_CONNECTION_STRING COLD_CONTAINER COLD_PREFIX COLD_GZIP \
+	POSTGRES_HOST POSTGRES_PORT POSTGRES_DATABASE POSTGRES_USER POSTGRES_PASSWORD POSTGRES_SSLMODE TIMESCALE_RETENTION_DAYS
+python3 - <<'PY'
+import json
+import os
+
+path = os.environ["LOCAL_SETTINGS_FILE"]
+
+# Keys managed by this script (only these are updated/overwritten)
+managed = {
+	"AzureWebJobsStorage": os.environ.get("STORAGE_CONNECTION_STRING", ""),
+	"HTTP_API_KEY": os.environ.get("HTTP_API_KEY", ""),
+	"EVENTHUB_CONNECTION_STRING": os.environ.get("EVENTHUB_CONNECTION_STRING", ""),
+	"EVENTHUB_NAME": os.environ.get("EVENTHUB_NAME", ""),
+	"EVENTHUB_CONSUMERGROUP": os.environ.get("EVENTHUB_CONSUMERGROUP_INGEST", ""),
+	"QUEUE_BLOB_BATCH": os.environ.get("QUEUE_BLOB_BATCH", ""),
+	"QUEUE_ALERTS": os.environ.get("QUEUE_ALERTS", ""),
+	"QUEUE_DB_WRITE": os.environ.get("QUEUE_DB_WRITE", ""),
+	"COLD_STORAGE_CONNECTION_STRING": os.environ.get("COLD_STORAGE_CONNECTION_STRING", ""),
+	"COLD_CONTAINER": os.environ.get("COLD_CONTAINER", ""),
+	"COLD_PREFIX": os.environ.get("COLD_PREFIX", ""),
+	"COLD_GZIP": os.environ.get("COLD_GZIP", ""),
+	"POSTGRES_HOST": os.environ.get("POSTGRES_HOST", ""),
+	"POSTGRES_PORT": os.environ.get("POSTGRES_PORT", ""),
+	"POSTGRES_DATABASE": os.environ.get("POSTGRES_DATABASE", ""),
+	"POSTGRES_USER": os.environ.get("POSTGRES_USER", ""),
+	"POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
+	"POSTGRES_SSLMODE": os.environ.get("POSTGRES_SSLMODE", ""),
+	"TIMESCALE_RETENTION_DAYS": os.environ.get("TIMESCALE_RETENTION_DAYS", ""),
+}
+
+# Basic sanity: don't accidentally write empty required values
+required = [
+	"AzureWebJobsStorage",
+	"HTTP_API_KEY",
+	"EVENTHUB_CONNECTION_STRING",
+	"EVENTHUB_NAME",
+	"QUEUE_BLOB_BATCH",
+	"QUEUE_ALERTS",
+	"QUEUE_DB_WRITE",
+]
+missing = [k for k in required if not managed.get(k)]
+if missing:
+	raise SystemExit(f"ERROR: Cannot write local.settings.json; missing values for: {', '.join(missing)}")
+
+# Load existing JSON if present
+if os.path.exists(path):
+	with open(path, "r", encoding="utf-8") as f:
+		try:
+			data = json.load(f)
+		except json.JSONDecodeError:
+			# If file exists but is invalid, start fresh rather than silently corrupting
+			raise SystemExit(f"ERROR: {path} exists but is not valid JSON")
+else:
+	data = {}
+
+# Preserve other top-level keys
+if "IsEncrypted" not in data:
+	data["IsEncrypted"] = False
+
+values = data.get("Values")
+if not isinstance(values, dict):
+	values = {}
+
+# Merge managed keys
+for k, v in managed.items():
+	values[k] = v
+
+data["Values"] = values
+
+with open(path, "w", encoding="utf-8") as f:
+	json.dump(data, f, indent=2, ensure_ascii=False)
+	f.write("\n")
+
+print(f"Updated local settings: {path}")
+PY
 
 echo
 echo "Infra step 01 completed."

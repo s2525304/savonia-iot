@@ -19,9 +19,8 @@ export interface HttpAuthConfig {
 export interface BlobWriterConfig {
 	connectionString: string;
 	container: string;
-	tier: "Hot" | "Cool" | "Cold" | "Archive";
-	gzip: boolean;
 	prefix: string;
+	gzip: boolean;
 }
 
 export interface AppConfig {
@@ -37,6 +36,28 @@ function requireEnv(name: string): string {
 		throw new Error(`Missing required environment variable: ${name}`);
 	}
 	return value;
+}
+
+function buildPostgresConnectionString(): string {
+	const host = requireEnv("POSTGRES_HOST");
+	const port = requireEnv("POSTGRES_PORT");
+	const database = requireEnv("POSTGRES_DATABASE");
+	const user = requireEnv("POSTGRES_USER");
+	const password = requireEnv("POSTGRES_PASSWORD");
+	const sslmode = process.env.POSTGRES_SSLMODE ?? "require";
+
+	// Encode user/password safely for URI usage
+	const encUser = encodeURIComponent(user);
+	const encPass = encodeURIComponent(password);
+
+	let cs = `postgresql://${encUser}:${encPass}@${host}:${port}/${database}`;
+
+	// Azure PostgreSQL requires SSL; pg uses ssl option but we keep sslmode for completeness
+	if (sslmode) {
+		cs += `?sslmode=${encodeURIComponent(sslmode)}`;
+	}
+
+	return cs;
 }
 
 function optionalNumberEnv(name: string, def: number): number {
@@ -67,19 +88,17 @@ function optionalBooleanEnv(name: string, def: boolean): boolean {
 export function loadConfig(): AppConfig {
 	return {
 		timescale: {
-			connectionString: requireEnv("TIMESCALE_CONNECTION_STRING"),
+			connectionString: buildPostgresConnectionString(),
 			retentionDays: optionalNumberEnv("TIMESCALE_RETENTION_DAYS", 30)
 		},
 		aggregates: {
 			refreshCron: process.env.AGGREGATES_REFRESH_CRON ?? "0 */5 * * * *"
 		},
 		blobWriter: {
-			connectionString: requireEnv("BLOB_STORAGE_CONNECTION_STRING"),
-			container: requireEnv("BLOB_CONTAINER_NAME"),
-			tier: optionalStringEnv("BLOB_DEFAULT_TIER", "Cool") as
-				"Hot" | "Cool" | "Cold" | "Archive",
-			gzip: optionalBooleanEnv("BLOB_GZIP", true),
-			prefix: optionalStringEnv("BLOB_PREFIX", "telemetry")
+			connectionString: requireEnv("COLD_STORAGE_CONNECTION_STRING"),
+			container: requireEnv("COLD_CONTAINER"),
+			prefix: optionalStringEnv("COLD_PREFIX", "telemetry"),
+			gzip: optionalBooleanEnv("COLD_GZIP", false)
 		},
 		httpAuth: {
 			apiKey: requireEnv("HTTP_API_KEY")

@@ -1,13 +1,10 @@
-import type { HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-
 import { query } from "../../shared/db";
-import { createLogger } from "../../shared/log";
-import { verifyApiKey } from "../../shared/http/auth";
+import { Sql } from "../../shared/sql";
+import { httpEndpoint, badRequest } from "../../shared/http/endpoint";
 import {
 	parseTimeRange,
 	parseLimit,
-	parseCursor,
-	wantsCsv
+	parseCursor
 } from "../../shared/http/query";
 import { csvResponse, toCsvWithMeta, type CsvValue, type CsvColumn } from "../../shared/http/csv";
 
@@ -29,13 +26,6 @@ function iso(d: Date): string {
 	return d.toISOString();
 }
 
-function badRequest(message: string): HttpResponseInit {
-	return {
-		status: 400,
-		jsonBody: { error: message }
-	};
-}
-
 function toCsvValue(v: unknown): CsvValue {
 	if (v === null || v === undefined) return "";
 	if (v instanceof Date) return v;
@@ -48,32 +38,19 @@ function toCsvValue(v: unknown): CsvValue {
 	}
 }
 
-export async function getHourly(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
-	const log = createLogger(context);
-
-	// API key auth (shared across HTTP endpoints)
-	const auth = verifyApiKey(request, context);
-	if (!auth.ok) return auth.response;
-
-	const deviceId = request.params.deviceId;
-	const sensorId = request.params.sensorId;
+export const getHourly = httpEndpoint(async ({ req, log, asCsv }) => {
+	const deviceId = req.params.deviceId;
+	const sensorId = req.params.sensorId;
 	if (!deviceId || !sensorId) {
 		return badRequest("Missing route params: deviceId and sensorId are required");
 	}
 
-	const { from, to } = parseTimeRange(request, { defaultHours: DEFAULT_RANGE_HOURS });
-	const limit = parseLimit(request, { defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT });
+	const { from, to } = parseTimeRange(req, { defaultHours: DEFAULT_RANGE_HOURS });
+	const limit = parseLimit(req, { defaultLimit: DEFAULT_LIMIT, maxLimit: MAX_LIMIT });
 
-	const cursor = parseCursor(request);
+	const cursor = parseCursor(req);
 	const hasAfter = cursor !== undefined;
 	const afterTs = cursor ? new Date(cursor.afterTs) : undefined;
-	const afterSeq = cursor?.afterSeq;
-
-	const asCsv = wantsCsv(request);
-
-	if (!from || !to) {
-		return badRequest("Invalid from/to. Use ISO timestamps, e.g. 2026-01-29T12:00:00Z");
-	}
 
 	if (from.getTime() > to.getTime()) {
 		return badRequest("Invalid range: from must be <= to");
@@ -91,8 +68,7 @@ export async function getHourly(request: HttpRequest, context: InvocationContext
 		from: iso(from),
 		to: iso(to),
 		limit,
-		afterTs: afterTs ? iso(afterTs) : undefined,
-		afterSeq
+		afterTs: afterTs ? iso(afterTs) : undefined
 	});
 
 	// Fetch one extra to know if there are more results.
@@ -100,7 +76,7 @@ export async function getHourly(request: HttpRequest, context: InvocationContext
 
 	// Cursor pagination:
 	// - hourly view has only the bucket timestamp as a natural cursor
-	// - we still accept/require afterSeq (shared cursor parser), but ignore it here
+	// - shared cursor parser requires afterSeq; we accept it but ignore it here
 	const values: unknown[] = [deviceId, sensorId, iso(from), iso(to)];
 	let whereCursorSql = "";
 	if (hasAfter && cursor) {
@@ -111,28 +87,16 @@ export async function getHourly(request: HttpRequest, context: InvocationContext
 	values.push(pageSize);
 	const limitParamIdx = values.length;
 
-	const sql = `
-		SELECT
-			bucket,
-			avg_value AS "avgValue",
-			min_value AS "minValue",
-			max_value AS "maxValue",
-			samples
-		FROM telemetry_hourly_avg
-		WHERE device_id = $1
-			AND sensor_id = $2
-			AND bucket >= $3::timestamptz
-			AND bucket <= $4::timestamptz
-			${whereCursorSql}
-		ORDER BY bucket ASC
-		LIMIT $${limitParamIdx}::int
-	`;
+	const sql = Sql.buildSelectHourlyAggregates(
+		whereCursorSql ? `\n\t\t${whereCursorSql}` : "",
+		limitParamIdx
+	);
 
-	const safeParams = values.map(v => ({
-		type: v === null ? "null" : Array.isArray(v) ? "array" : typeof v,
-		preview: typeof v === "string" ? v.slice(0, 80) : typeof v === "number" || typeof v === "boolean" ? v : undefined
-	}));
-	log.debug("hourly.get: sql", { sql, params: safeParams });
+	log.debug("hourly.get: sql", {
+		name: "buildSelectHourlyAggregates",
+		params: values.length,
+		hasCursor: Boolean(whereCursorSql)
+	});
 
 	try {
 		const res = await query(sql, values);
@@ -213,51 +177,23 @@ export async function getHourly(request: HttpRequest, context: InvocationContext
 			}
 		};
 	} catch (err) {
-		const describeError = (e: unknown): Record<string, unknown> => {
-			if (e == null) return { err: e };
-			if (e instanceof Error) {
-				const anyE = e as unknown as Record<string, unknown>;
-				const get = (k: string): unknown => (k in anyE ? anyE[k] : undefined);
-				return {
-					name: e.name,
-					message: e.message,
-					stack: e.stack,
-					code: get("code"),
-					detail: get("detail"),
-					hint: get("hint"),
-					where: get("where"),
-					severity: get("severity"),
-					position: get("position"),
-					internalPosition: get("internalPosition"),
-					internalQuery: get("internalQuery"),
-					schema: get("schema"),
-					table: get("table"),
-					column: get("column"),
-					constraint: get("constraint"),
-					dataType: get("dataType"),
-					file: get("file"),
-					line: get("line"),
-					routine: get("routine"),
-					details: get("details")
-				};
-			}
-			try {
-				return { err: JSON.stringify(e) };
-			} catch {
-				return { err: String(e) };
-			}
-		};
+		const e = err instanceof Error ? err : new Error(String(err));
+		const anyE = e as unknown as Record<string, unknown>;
+		const get = (k: string): unknown => (k in anyE ? anyE[k] : undefined);
 
 		log.error("hourly.get: query failed", {
-			...describeError(err),
+			name: e.name,
+			message: e.message,
+			code: get("code"),
+			detail: get("detail"),
+			hint: get("hint"),
 			query: {
 				deviceId,
 				sensorId,
 				from: iso(from),
 				to: iso(to),
 				limit,
-				afterTs: afterTs ? iso(afterTs) : undefined,
-				afterSeq
+				afterTs: afterTs ? iso(afterTs) : undefined
 			}
 		});
 
@@ -266,4 +202,4 @@ export async function getHourly(request: HttpRequest, context: InvocationContext
 			jsonBody: { error: "Failed to fetch hourly aggregates" }
 		};
 	}
-}
+}, { name: "hourly.get" });

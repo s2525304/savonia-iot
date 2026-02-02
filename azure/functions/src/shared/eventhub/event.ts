@@ -1,6 +1,6 @@
 
 
-// src/shared/iothub/event.ts
+// src/shared/eventhub/event.ts
 //
 // Azure Event Hub trigger payloads can arrive in multiple shapes depending on runtime/SDK:
 // - string

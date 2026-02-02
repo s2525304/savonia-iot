@@ -1,44 +1,25 @@
 import type { InvocationContext } from "@azure/functions";
-import { BlobServiceClient, BlockBlobTier } from "@azure/storage-blob";
-import { randomUUID } from "crypto";
-import { gzipSync } from "zlib";
+import { BlobServiceClient } from "@azure/storage-blob";
+import pMap from "p-map";
 
 import { createLogger } from "../shared/log";
 import { loadConfig } from "../shared/config";
-import { parseTelemetryBatch } from "../shared/iothub/parseTelemetry";
-import type { TelemetryMessage } from "../shared/iothub/telemetry";
+import { parseQueueMessages } from "../shared/queue/parseQueueMessage";
+import type { TelemetryMessage } from "../shared/eventhub/telemetry";
 
-// We store IoT Hub telemetry events into a cold-storage blob container as JSONL (optionally gzipped).
+// We store IoT Hub telemetry events into a cold-storage blob container as JSONL append blobs.
 //
-// Expected payload (from MQTT -> IoT Hub -> Event Hub):
-// {
-//   schemaVersion: 1,
-//   deviceId: string,
-//   sensorId: string,
-//   ts: string,
-//   seq: number,
-//   type: string,
-//   valueType: "number"|"boolean"|"string"|"enum",
-//   value: number|boolean|string,
-//   unit?: string,
-//   location?: string
-// }
+// Expected payload (from the Azure Storage Queue message):
+// Array of TelemetryMessage objects
 //
 // Env vars (Function App settings):
 // - COLD_STORAGE_CONNECTION_STRING (required)
 // - COLD_STORAGE_CONTAINER (optional, default: telemetry-archive)
-// - COLD_STORAGE_TIER (optional: Hot|Cool|Cold|Archive, default: Cool)
-// - COLD_STORAGE_GZIP (optional: true|false, default: true)
+// - COLD_STORAGE_GZIP (optional: true|false, default: true) - ignored in append-blob mode
 // - COLD_STORAGE_PREFIX (optional, default: telemetry)
-
-function mapTier(tier: "Hot" | "Cool" | "Cold" | "Archive"): BlockBlobTier {
-	switch (tier) {
-		case "Hot": return BlockBlobTier.Hot;
-		case "Cool": return BlockBlobTier.Cool;
-		case "Cold": return BlockBlobTier.Cold;
-		case "Archive": return BlockBlobTier.Archive;
-	}
-}
+//
+// Blobs are written as .jsonl append blobs, grouped by deviceId + sensorId + hour (UTC).
+// Gzip compression is ignored in append-blob mode.
 
 function datePathParts(tsIso: string): { yyyy: string; mm: string; dd: string; hh: string } {
 	const d = new Date(tsIso);
@@ -89,81 +70,77 @@ async function getContainerClient(): Promise<ReturnType<BlobServiceClient["getCo
 	return containerClient;
 }
 
-export async function runBlobWriter(events: unknown, context: InvocationContext): Promise<void> {
+export async function runBlobWriter(queueItem: unknown, context: InvocationContext): Promise<void> {
 	const log = createLogger(context);
-
 	const cfg = loadConfig().blobWriter;
 
 	const containerName = cfg.container;
-	const gzipEnabled = cfg.gzip;
 	const prefix = cfg.prefix;
-	const tier = mapTier(cfg.tier);
+	const gzipEnabled = cfg.gzip;
 
-	if (events == null || (Array.isArray(events) && events.length === 0)) {
-		log.debug("blob-writer: no events");
+	if (gzipEnabled) {
+		log.debug("blob-writer: gzip is configured but ignored (append-blob mode)");
+	}
+
+	const messages = parseQueueMessages<TelemetryMessage>(queueItem);
+	if (messages.length === 0) {
+		log.debug("blob-writer: no messages");
 		return;
 	}
 
 	const container = await getContainerClient();
 
-	const parsed = parseTelemetryBatch(events, context);
-	const messages: TelemetryMessage[] = parsed.ok;
-	const parsedOk = parsed.ok.length;
-	const parsedBad = parsed.bad.length;
-
-	if (messages.length === 0) {
-		log.info("blob-writer: nothing to write", { parsedOk, parsedBad });
-		return;
-	}
-
-	// Partition by hour based on event timestamp (UTC) to keep files reasonably sized.
-	// Also split by deviceId to avoid hot blobs when many devices send concurrently.
+	// Partition key: yyyy/mm/dd/hh/deviceId/sensorId (UTC hour)
 	const byPartition = new Map<string, TelemetryMessage[]>();
 	for (const m of messages) {
 		const { yyyy, mm, dd, hh } = datePathParts(m.ts);
 		const device = sanitizePathPart(m.deviceId);
-		const key = `${yyyy}/${mm}/${dd}/${hh}/${device}`;
+		const sensor = sanitizePathPart(m.sensorId);
+		const key = `${yyyy}/${mm}/${dd}/${hh}/${device}/${sensor}`;
 		const arr = byPartition.get(key) ?? [];
 		arr.push(m);
 		byPartition.set(key, arr);
 	}
 
-	let uploaded = 0;
+	let appended = 0;
 	let failed = 0;
 
-	for (const [key, batch] of byPartition.entries()) {
-		// JSON Lines
-		const jsonl = `${batch.map(b => JSON.stringify(b)).join("\n")}\n`;
-		const raw = Buffer.from(jsonl, "utf8");
-		const data = gzipEnabled ? gzipSync(raw) : raw;
+	const CONCURRENCY = Number.parseInt(process.env.BLOB_WRITE_CONCURRENCY ?? "8", 10) || 8;
 
-		const ext = gzipEnabled ? "jsonl.gz" : "jsonl";
-		const file = `${new Date().toISOString()}_${randomUUID()}.${ext}`;
-		const blobName = `${prefix}/${key}/${file}`;
+	await pMap(
+		Array.from(byPartition.entries()),
+		async ([key, batch]) => {
+			// NDJSON (uncompressed to allow append)
+			const ndjson = `${batch.map(b => JSON.stringify(b)).join("\n")}\n`;
+			const data = Buffer.from(ndjson, "utf8");
 
-		try {
-			const blob = container.getBlockBlobClient(blobName);
-			await blob.uploadData(data, {
-				blobHTTPHeaders: {
-					blobContentType: "application/x-ndjson",
-					...(gzipEnabled ? { blobContentEncoding: "gzip" } : {})
-				},
-				tier
-			});
-			uploaded += batch.length;
-		} catch (err) {
-			failed += batch.length;
-			log.error("blob-writer: upload failed", { blobName, err: String(err) });
-		}
-	}
+			const blobName = `${prefix}/${key}.jsonl`;
+
+			try {
+				const blob = container.getAppendBlobClient(blobName);
+
+				// Create once (idempotent). Set HTTP headers to create operation.
+				await blob.createIfNotExists({
+					blobHTTPHeaders: {
+						blobContentType: "application/x-ndjson; charset=utf-8"
+					}
+				});
+
+				await blob.appendBlock(data, data.length);
+				appended += batch.length;
+			} catch (err) {
+				failed += batch.length;
+				log.error("blob-writer: append failed", { blobName, err: String(err) });
+			}
+		},
+		{ concurrency: CONCURRENCY }
+	);
 
 	log.info("blob-writer: done", {
-		received: Array.isArray(events) ? events.length : 1,
-		parsedOk,
-		parsedBad,
-		uploaded,
+		received: messages.length,
+		partitions: byPartition.size,
+		appended,
 		failed,
-		container: containerName,
-		tier: cfg.tier
+		container: containerName
 	});
 }
