@@ -37,4 +37,59 @@
 	document.getElementById("auth-status").textContent =
 		provider === "github" ? `Logged in as ${githubUser}` : `Logged in as ${email}`;
 	document.getElementById("app").hidden = false;
+
+	const deviceSelect = document.getElementById("device-select");
+	const sensorSelect = document.getElementById("sensor-select");
+
+	async function loadDevices() {
+		const res = await fetch("/api/devices");
+		if (!res.ok) {
+			console.error("Failed to load devices");
+			return;
+		}
+		const data = await res.json();
+		const devices = data.devices ?? [];
+
+		deviceSelect.innerHTML = "<option value=''>Select device</option>";
+		for (const d of devices) {
+			const opt = document.createElement("option");
+			opt.value = d.deviceId;
+			opt.textContent = d.deviceId;
+			deviceSelect.appendChild(opt);
+		}
+	}
+
+	async function loadSensors(deviceId) {
+		sensorSelect.disabled = true;
+		sensorSelect.innerHTML = "<option value=''>Loading…</option>";
+
+		const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/sensors`);
+		if (!res.ok) {
+			console.error("Failed to load sensors");
+			return;
+		}
+		const data = await res.json();
+		const sensors = data.sensors ?? [];
+
+		sensorSelect.innerHTML = "<option value=''>Select sensor</option>";
+		for (const s of sensors) {
+			const opt = document.createElement("option");
+			opt.value = s.sensorId;
+			opt.textContent = s.sensorId;
+			sensorSelect.appendChild(opt);
+		}
+		sensorSelect.disabled = false;
+	}
+
+	deviceSelect.addEventListener("change", () => {
+		const deviceId = deviceSelect.value;
+		if (!deviceId) {
+			sensorSelect.innerHTML = "<option value=''>Select device first</option>";
+			sensorSelect.disabled = true;
+			return;
+		}
+		loadSensors(deviceId);
+	});
+
+	await loadDevices();
 })();

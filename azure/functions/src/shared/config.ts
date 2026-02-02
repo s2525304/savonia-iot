@@ -14,6 +14,7 @@ export interface AggregatesConfig {
 
 export interface HttpAuthConfig {
 	apiKey: string;
+	allowedUsers: string[];
 }
 
 export interface BlobWriterConfig {
@@ -85,6 +86,15 @@ function optionalBooleanEnv(name: string, def: boolean): boolean {
 	throw new Error(`Environment variable ${name} must be "true" or "false"`);
 }
 
+function optionalStringArrayEnv(name: string): string[] {
+	const raw = process.env[name];
+	if (!raw || raw.trim() === "") return [];
+	return raw
+		.split(",")
+		.map(v => v.trim())
+		.filter(v => v.length > 0);
+}
+
 export function loadConfig(): AppConfig {
 	return {
 		timescale: {
@@ -101,7 +111,8 @@ export function loadConfig(): AppConfig {
 			gzip: optionalBooleanEnv("COLD_GZIP", false)
 		},
 		httpAuth: {
-			apiKey: requireEnv("HTTP_API_KEY")
+			apiKey: requireEnv("HTTP_API_KEY"),
+			allowedUsers: optionalStringArrayEnv("HTTP_ALLOWED_USERS")
 		}
 	};
 }
