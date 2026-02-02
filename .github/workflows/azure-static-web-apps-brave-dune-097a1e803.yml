@@ -40,9 +40,15 @@ jobs:
           action: "upload"
           ###### Repository/Build Configurations - These values can be configured to match your app requirements. ######
           # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
-          app_location: "/azure/webui" # App source code path
-          api_location: "/azure/functions" # Api source code path - optional
-          output_location: "/" # Built app content directory - optional
+          app_location: "azure/webui" # App source code path (static UI)
+
+          # API is linked to an existing Azure Function App via the Static Web App "Backends / APIs" setting.
+          # When linked, requests to routes starting with `/api` are reverse-proxied to that backend.
+          # Keep api_location empty so this workflow does NOT try to build/deploy Functions from this repo.
+          api_location: ""
+
+          # Plain HTML/JS (no build). If you later add a build step, set output_location to the build output folder.
+          output_location: ""
           github_id_token: ${{ steps.idtoken.outputs.result }}
           ###### End of Repository/Build Configurations ######
 
