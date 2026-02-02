@@ -84,7 +84,7 @@ export function httpEndpoint(handler: EndpointHandler, opts?: EndpointOptions) {
 			if (requireAuth) {
 				// verifyApiKey has slightly different call sites across the repo (with/without context).
 				// Call it with both to keep behavior consistent.
-				const auth = verifyApiKey(req, context);
+				const auth = await verifyApiKey(req, context);
 				if (!auth.ok) return auth.response;
 			}
 

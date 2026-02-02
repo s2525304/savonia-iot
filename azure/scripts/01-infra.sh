@@ -126,8 +126,37 @@ require_var TIMESCALE_RETENTION_DAYS
 
 # HTTP API
 require_var HTTP_API_KEY
+
 # Optional: comma-separated list of allowed authenticated users (e.g. GitHub usernames)
 HTTP_ALLOWED_USERS="${HTTP_ALLOWED_USERS:-}"
+
+# Optional: SWA-linked JWT auth for HTTP APIs (Option A)
+# If SWA_NAME is provided, we can derive issuer/audience/jwksUri automatically.
+SWA_NAME="${SWA_NAME:-}"
+HTTP_JWT_ISSUER="${HTTP_JWT_ISSUER:-}"
+HTTP_JWT_AUDIENCE="${HTTP_JWT_AUDIENCE:-}"
+HTTP_JWKS_URI="${HTTP_JWKS_URI:-}"
+
+# Derive JWT settings from SWA if possible (only when not explicitly set)
+# - issuer  : https://<swa-host>/.auth
+# - jwksUri : https://<swa-host>/.auth/keys
+# - audience: https://<functionapp>.azurewebsites.net
+if [[ -n "$SWA_NAME" ]]; then
+	SWA_DEFAULT_HOSTNAME="$(az staticwebapp show -g "$AZURE_RESOURCE_GROUP" -n "$SWA_NAME" --query defaultHostname -o tsv 2>/dev/null || echo "")"
+	if [[ -n "$SWA_DEFAULT_HOSTNAME" ]]; then
+		if [[ -z "$HTTP_JWT_ISSUER" ]]; then
+			HTTP_JWT_ISSUER="https://${SWA_DEFAULT_HOSTNAME}/.auth"
+		fi
+		if [[ -z "$HTTP_JWKS_URI" ]]; then
+			HTTP_JWKS_URI="https://${SWA_DEFAULT_HOSTNAME}/.auth/keys"
+		fi
+		if [[ -z "$HTTP_JWT_AUDIENCE" ]]; then
+			HTTP_JWT_AUDIENCE="https://${FUNCTIONAPP_NAME}.azurewebsites.net"
+		fi
+	else
+		echo "WARNING: Could not resolve SWA defaultHostname for SWA_NAME='$SWA_NAME'. JWT auth env vars will not be derived."
+	fi
+fi
 
 # Extra safety: prevent accidentally deploying with placeholder password
 if [[ "$POSTGRES_PASSWORD" == "CHANGE_ME" ]]; then
@@ -141,6 +170,15 @@ if [[ "$HTTP_API_KEY" == "CHANGE_ME" ]]; then
 	echo "ERROR: HTTP_API_KEY is set to 'CHANGE_ME'."
 	echo "Please set a real key in azure.env before running this script."
 	exit 1
+fi
+
+# If any JWT settings are configured, require all 3.
+# (They are typically derived from SWA_NAME, but can be set manually.)
+if [[ -n "${HTTP_JWT_ISSUER}" || -n "${HTTP_JWT_AUDIENCE}" || -n "${HTTP_JWKS_URI}" ]]; then
+	if [[ -z "${HTTP_JWT_ISSUER}" || -z "${HTTP_JWT_AUDIENCE}" || -z "${HTTP_JWKS_URI}" ]]; then
+		echo "ERROR: Partial JWT config. If using SWA JWT auth, set all of: HTTP_JWT_ISSUER, HTTP_JWT_AUDIENCE, HTTP_JWKS_URI (or set SWA_NAME so they are derived)."
+		exit 1
+	fi
 fi
 
 echo "============================================================"
@@ -686,6 +724,10 @@ echo "Storage acct : $FUNCTIONAPP_STORAGE_ACCOUNT"
 echo "Function App : $FUNCTIONAPP_NAME"
 echo "Node         : $FUNCTIONAPP_NODE_VERSION"
 echo "Functions    : v$FUNCTIONAPP_FUNCTIONS_VERSION"
+echo "SWA name     : ${SWA_NAME:-<none>}"
+echo "JWT issuer   : ${HTTP_JWT_ISSUER:-<none>}"
+echo "JWT audience : ${HTTP_JWT_AUDIENCE:-<none>}"
+echo "JWKS URI     : ${HTTP_JWKS_URI:-<none>}"
 echo "Cold container: $COLD_CONTAINER"
 echo "Queues       : $QUEUE_BLOB_BATCH , $QUEUE_ALERTS , $QUEUE_DB_WRITE"
 echo "------------------------------------------------------------"
@@ -810,6 +852,10 @@ az functionapp config appsettings set \
 	"AzureWebJobsStorage=$STORAGE_CONNECTION_STRING" \
 	"HTTP_API_KEY=$HTTP_API_KEY" \
 	"HTTP_ALLOWED_USERS=$HTTP_ALLOWED_USERS" \
+	"HTTP_JWT_ISSUER=$HTTP_JWT_ISSUER" \
+	"HTTP_JWT_AUDIENCE=$HTTP_JWT_AUDIENCE" \
+	"HTTP_JWKS_URI=$HTTP_JWKS_URI" \
+	"SWA_NAME=$SWA_NAME" \
 	"EVENTHUB_CONNECTION_STRING=$EVENTHUB_CONNECTION_STRING" \
 	"EVENTHUB_NAME=$EVENTHUB_NAME" \
 	"EVENTHUB_CONSUMERGROUP=$EVENTHUB_CONSUMERGROUP_INGEST" \
@@ -918,7 +964,7 @@ LOCAL_SETTINGS_FILE="$LOCAL_SETTINGS_DIR/local.settings.json"
 mkdir -p "$LOCAL_SETTINGS_DIR"
 
 COLD_STORAGE_CONNECTION_STRING="$STORAGE_CONNECTION_STRING"
-export LOCAL_SETTINGS_FILE HTTP_API_KEY HTTP_ALLOWED_USERS STORAGE_CONNECTION_STRING EVENTHUB_CONNECTION_STRING EVENTHUB_NAME EVENTHUB_CONSUMERGROUP_INGEST \
+export LOCAL_SETTINGS_FILE HTTP_API_KEY HTTP_ALLOWED_USERS HTTP_JWT_ISSUER HTTP_JWT_AUDIENCE HTTP_JWKS_URI SWA_NAME STORAGE_CONNECTION_STRING EVENTHUB_CONNECTION_STRING EVENTHUB_NAME EVENTHUB_CONSUMERGROUP_INGEST \
 	QUEUE_BLOB_BATCH QUEUE_ALERTS QUEUE_DB_WRITE \
 	COLD_STORAGE_CONNECTION_STRING COLD_CONTAINER COLD_PREFIX COLD_GZIP \
 	POSTGRES_HOST POSTGRES_PORT POSTGRES_DATABASE POSTGRES_USER POSTGRES_PASSWORD POSTGRES_SSLMODE TIMESCALE_RETENTION_DAYS
@@ -933,6 +979,10 @@ managed = {
 	"AzureWebJobsStorage": os.environ.get("STORAGE_CONNECTION_STRING", ""),
 	"HTTP_API_KEY": os.environ.get("HTTP_API_KEY", ""),
 	"HTTP_ALLOWED_USERS": os.environ.get("HTTP_ALLOWED_USERS", ""),
+	"HTTP_JWT_ISSUER": os.environ.get("HTTP_JWT_ISSUER", ""),
+	"HTTP_JWT_AUDIENCE": os.environ.get("HTTP_JWT_AUDIENCE", ""),
+	"HTTP_JWKS_URI": os.environ.get("HTTP_JWKS_URI", ""),
+	"SWA_NAME": os.environ.get("SWA_NAME", ""),
 	"EVENTHUB_CONNECTION_STRING": os.environ.get("EVENTHUB_CONNECTION_STRING", ""),
 	"EVENTHUB_NAME": os.environ.get("EVENTHUB_NAME", ""),
 	"EVENTHUB_CONSUMERGROUP": os.environ.get("EVENTHUB_CONSUMERGROUP_INGEST", ""),

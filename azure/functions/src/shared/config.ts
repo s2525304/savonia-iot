@@ -15,6 +15,9 @@ export interface AggregatesConfig {
 export interface HttpAuthConfig {
 	apiKey: string;
 	allowedUsers: string[];
+	jwtIssuer: string;
+	jwtAudience: string;
+	jwksUri: string;
 }
 
 export interface BlobWriterConfig {
@@ -53,7 +56,7 @@ function buildPostgresConnectionString(): string {
 
 	let cs = `postgresql://${encUser}:${encPass}@${host}:${port}/${database}`;
 
-	// Azure PostgreSQL requires SSL; pg uses ssl option but we keep sslmode for completeness
+	// Azure PostgreSQL requires SSL; pg uses ssl option, but we keep sslmode for completeness
 	if (sslmode) {
 		cs += `?sslmode=${encodeURIComponent(sslmode)}`;
 	}
@@ -112,7 +115,10 @@ export function loadConfig(): AppConfig {
 		},
 		httpAuth: {
 			apiKey: requireEnv("HTTP_API_KEY"),
-			allowedUsers: optionalStringArrayEnv("HTTP_ALLOWED_USERS")
+			allowedUsers: optionalStringArrayEnv("HTTP_ALLOWED_USERS"),
+			jwtIssuer: requireEnv("HTTP_JWT_ISSUER"),
+			jwtAudience: requireEnv("HTTP_JWT_AUDIENCE"),
+			jwksUri: requireEnv("HTTP_JWKS_URI")
 		}
 	};
 }
