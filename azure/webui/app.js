@@ -3,8 +3,6 @@
 	const allowedGithubUser = "s2525304";
 	const allowedEmail = "s2525304@edu.savonia.fi";
 
-	const x_api_key = "TokkoKoriKalaSukka878"
-
 	const res = await fetch("/.auth/me");
 	const data = await res.json();
 	const principal = data?.clientPrincipal;
@@ -44,7 +42,7 @@
 	const sensorSelect = document.getElementById("sensor-select");
 
 	async function loadDevices() {
-		const res = await fetch(`/api/devices?code=${encodeURIComponent(x_api_key)}`);
+		const res = await fetch("/api/devices");
 		if (!res.ok) {
 			console.error("Failed to load devices");
 			return;
@@ -65,7 +63,7 @@
 		sensorSelect.disabled = true;
 		sensorSelect.innerHTML = "<option value=''>Loading…</option>";
 
-		const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/sensors?code=${encodeURIComponent(x_api_key)}`);
+		const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/sensors`);
 		if (!res.ok) {
 			console.error("Failed to load sensors");
 			return;
