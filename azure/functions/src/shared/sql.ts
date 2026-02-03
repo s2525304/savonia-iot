@@ -92,6 +92,60 @@ export const Sql = {
 	ORDER BY sensor_id;`,
 
 	/**
+	 * Returns the latest known value_type for a device+sensor, derived from telemetry.
+	 * Used to validate that alert triggers are only created for numeric sensors.
+	 */
+	selectSensorValueType: `SELECT
+		value_type as "valueType"
+	FROM telemetry
+	WHERE device_id = $1
+		AND sensor_id = $2
+	ORDER BY ts DESC, seq DESC
+	LIMIT 1;`,
+
+	/**
+	 * Reads the alert trigger (min/max) for a device+sensor.
+	 */
+	selectAlertTrigger: `SELECT
+		min_value AS "minValue",
+		max_value AS "maxValue",
+		enabled AS "enabled",
+		updated_at AS "updatedAt"
+	FROM alert_triggers
+	WHERE device_id = $1
+		AND sensor_id = $2
+	LIMIT 1;`,
+
+	/**
+	 * Upserts the alert trigger bounds for a device+sensor.
+	 * Missing side should be passed as NULL to clear it.
+	 */
+	upsertAlertTrigger: `INSERT INTO alert_triggers (
+			device_id,
+			sensor_id,
+			value_type,
+			min_value,
+			max_value,
+			enabled,
+			updated_at
+		)
+		VALUES ($1, $2, 'number', $3, $4, TRUE, NOW())
+		ON CONFLICT (device_id, sensor_id)
+		DO UPDATE SET
+			value_type = 'number',
+			min_value = EXCLUDED.min_value,
+			max_value = EXCLUDED.max_value,
+			enabled = TRUE,
+			updated_at = NOW();`,
+
+	/**
+	 * Deletes the alert trigger for a device+sensor.
+	 */
+	deleteAlertTrigger: `DELETE FROM alert_triggers
+	WHERE device_id = $1
+		AND sensor_id = $2;`,
+
+	/**
 	 * Build hourly aggregates query for a device and sensor within a time range.
 	 *
 	 * @param whereCursorSql  Additional cursor clause starting with "AND ..." or empty string.

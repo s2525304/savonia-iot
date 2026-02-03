@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>Savonia IoT</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="favicon.ico" sizes="any">
 </head>
 <body>
 <h1>Savonia IoT</h1>
@@ -13,14 +14,73 @@
 <div id="app" hidden>
   <select id="device-select"></select>
   <select id="sensor-select" disabled></select>
-  <input type="date" id="from">
-  <input type="date" id="to">
+
+  <label>
+    From
+    <input type="datetime-local" id="from">
+  </label>
+  <label>
+    To
+    <input type="datetime-local" id="to">
+  </label>
   <button id="load">Load</button>
   <button id="csv">Download CSV</button>
 
   <canvas id="chart"></canvas>
+
+  <div class="legend" id="legend" hidden>
+    <label>
+      <input type="checkbox" id="line-raw" checked>
+      <span class="swatch" style="background:#9ca3af"></span>
+      Raw
+    </label>
+    <label>
+      <input type="checkbox" id="line-avg" checked>
+      <span class="swatch" style="background:#2563eb"></span>
+      Hourly avg
+    </label>
+    <label>
+      <input type="checkbox" id="line-min" checked>
+      <span class="swatch" style="background:#7c3aed"></span>
+      Hourly min
+    </label>
+    <label>
+      <input type="checkbox" id="line-max" checked>
+      <span class="swatch" style="background:#14b8a6"></span>
+      Hourly max
+    </label>
+  </div>
+
+  <div class="trigger" id="trigger" hidden>
+    <div class="trigger-header">
+      <strong>Alert trigger</strong>
+      <span class="muted" id="trigger-status">Not configured</span>
+    </div>
+
+    <div class="trigger-fields">
+      <label>
+        Min
+        <input type="number" id="trigger-min" step="any" placeholder="(no min)">
+      </label>
+      <label>
+        Max
+        <input type="number" id="trigger-max" step="any" placeholder="(no max)">
+      </label>
+
+      <button id="trigger-save" type="button">Save</button>
+      <button id="trigger-clear" type="button">Clear</button>
+    </div>
+
+    <div class="hint muted">
+      Leave a field empty to remove that bound.
+    </div>
+  </div>
 </div>
 
+<script src="utils.js"></script>
+<script src="auth.js"></script>
+<script src="api.js"></script>
+<script src="graph.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

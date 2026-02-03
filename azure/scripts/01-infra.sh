@@ -94,7 +94,22 @@ require_var EVENTHUB_NAME
 require_var EVENTHUB_SKU
 require_var EVENTHUB_PARTITIONS
 require_var EVENTHUB_CONSUMERGROUP_INGEST
-require_var EVENTHUB_CONSUMERGROUP_EXTRA
+# Optional consumer group for future use (e.g. debugging or separate consumers)
+# NOTE: Event Hubs Basic tier supports only a single consumer group: $Default.
+EVENTHUB_CONSUMERGROUP_EXTRA="${EVENTHUB_CONSUMERGROUP_EXTRA:-}"
+
+# Basic tier cannot create custom consumer groups. If user requested one, fall back to $Default.
+if [[ "${EVENTHUB_SKU}" == "Basic" ]]; then
+	if [[ "${EVENTHUB_CONSUMERGROUP_INGEST}" != '$Default' ]]; then
+		echo "WARNING: EVENTHUB_SKU is Basic; consumer groups other than '\$Default' are not supported."
+		echo "WARNING: Overriding EVENTHUB_CONSUMERGROUP_INGEST='${EVENTHUB_CONSUMERGROUP_INGEST}' -> '\$Default'."
+		EVENTHUB_CONSUMERGROUP_INGEST='$Default'
+	fi
+	if [[ -n "${EVENTHUB_CONSUMERGROUP_EXTRA}" ]]; then
+		echo "WARNING: EVENTHUB_SKU is Basic; extra consumer group '${EVENTHUB_CONSUMERGROUP_EXTRA}' is not supported. Ignoring."
+		EVENTHUB_CONSUMERGROUP_EXTRA=""
+	fi
+fi
 
 # Storage / Function App
 require_var FUNCTIONAPP_STORAGE_ACCOUNT
@@ -287,7 +302,8 @@ echo "Event Hub   : $EVENTHUB_NAME"
 echo "SKU         : $EVENTHUB_SKU"
 echo "Partitions  : $EVENTHUB_PARTITIONS"
 echo "CG (ingest) : $EVENTHUB_CONSUMERGROUP_INGEST"
-echo "CG (extra)  : $EVENTHUB_CONSUMERGROUP_EXTRA"
+echo '(Note) Basic tier supports only $Default'
+echo "CG (extra)  : ${EVENTHUB_CONSUMERGROUP_EXTRA:-<none>}"
 echo "------------------------------------------------------------"
 
 # Ensure Event Hubs resource provider is registered (one-time per subscription)
@@ -355,30 +371,43 @@ else
 fi
 
 # Consumer groups (non-destructive; create if missing)
-if ! az eventhubs eventhub consumer-group show \
-		--name "$EVENTHUB_CONSUMERGROUP_INGEST" \
-		--eventhub-name "$EVENTHUB_NAME" \
-		--namespace-name "$EVENTHUB_NAMESPACE" \
-		--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
-	echo "Creating consumer group: $EVENTHUB_CONSUMERGROUP_INGEST"
-	az eventhubs eventhub consumer-group create \
-		--name "$EVENTHUB_CONSUMERGROUP_INGEST" \
-		--eventhub-name "$EVENTHUB_NAME" \
-		--namespace-name "$EVENTHUB_NAMESPACE" \
-		--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null
+# NOTE: Basic tier only supports $Default and does not allow consumer-group create operations.
+if [[ "${EVENTHUB_SKU}" == "Basic" ]]; then
+	# Nothing to create; $Default always exists.
+	EVENTHUB_CONSUMERGROUP_INGEST='$Default'
+else
+	if ! az eventhubs eventhub consumer-group show \
+			--name "$EVENTHUB_CONSUMERGROUP_INGEST" \
+			--eventhub-name "$EVENTHUB_NAME" \
+			--namespace-name "$EVENTHUB_NAMESPACE" \
+			--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+		echo "Creating consumer group: $EVENTHUB_CONSUMERGROUP_INGEST"
+		az eventhubs eventhub consumer-group create \
+			--name "$EVENTHUB_CONSUMERGROUP_INGEST" \
+			--eventhub-name "$EVENTHUB_NAME" \
+			--namespace-name "$EVENTHUB_NAMESPACE" \
+			--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null
+	fi
 fi
 
-if ! az eventhubs eventhub consumer-group show \
-		--name "$EVENTHUB_CONSUMERGROUP_EXTRA" \
-		--eventhub-name "$EVENTHUB_NAME" \
-		--namespace-name "$EVENTHUB_NAMESPACE" \
-		--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
-	echo "Creating consumer group: $EVENTHUB_CONSUMERGROUP_EXTRA"
-	az eventhubs eventhub consumer-group create \
-		--name "$EVENTHUB_CONSUMERGROUP_EXTRA" \
-		--eventhub-name "$EVENTHUB_NAME" \
-		--namespace-name "$EVENTHUB_NAMESPACE" \
-		--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null
+# Extra consumer group is optional. Basic tier supports only a single consumer group.
+if [[ -n "${EVENTHUB_CONSUMERGROUP_EXTRA}" ]]; then
+	if [[ "${EVENTHUB_SKU}" == "Basic" ]]; then
+		echo "WARNING: EVENTHUB_SKU is Basic; skipping creation of extra consumer group '${EVENTHUB_CONSUMERGROUP_EXTRA}'."
+	else
+		if ! az eventhubs eventhub consumer-group show \
+				--name "$EVENTHUB_CONSUMERGROUP_EXTRA" \
+				--eventhub-name "$EVENTHUB_NAME" \
+				--namespace-name "$EVENTHUB_NAMESPACE" \
+				--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+			echo "Creating consumer group: $EVENTHUB_CONSUMERGROUP_EXTRA"
+			az eventhubs eventhub consumer-group create \
+				--name "$EVENTHUB_CONSUMERGROUP_EXTRA" \
+				--eventhub-name "$EVENTHUB_NAME" \
+				--namespace-name "$EVENTHUB_NAMESPACE" \
+				--resource-group "$AZURE_RESOURCE_GROUP" >/dev/null
+		fi
+	fi
 fi
 
 # ------------------------------------------------------------
@@ -1050,3 +1079,35 @@ PY
 
 echo
 echo "Infra step 01 completed."
+
+# ------------------------------------------------------------------------------
+# Optional: Configure Static Web App API proxy environment variables
+# ------------------------------------------------------------------------------
+
+if [[ -n "${SWA_NAME:-}" ]]; then
+	echo
+	echo "------------------------------------------------------------"
+	echo "Static Web App configuration"
+	echo "SWA name    : $SWA_NAME"
+	echo "------------------------------------------------------------"
+
+	UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-https://${FUNCTIONAPP_NAME}.azurewebsites.net}"
+	UPSTREAM_API_CODE="${UPSTREAM_API_CODE:-$HTTP_API_KEY}"
+
+	echo "Setting SWA app settings:"
+	echo "  UPSTREAM_BASE_URL=$UPSTREAM_BASE_URL"
+	echo "  UPSTREAM_API_CODE=<hidden>"
+
+	az staticwebapp appsettings set \
+		--name "$SWA_NAME" \
+		--resource-group "$AZURE_RESOURCE_GROUP" \
+		--setting-names \
+			"UPSTREAM_BASE_URL=$UPSTREAM_BASE_URL" \
+			"UPSTREAM_API_CODE=$UPSTREAM_API_CODE" \
+		>/dev/null
+
+	echo "Static Web App appsettings applied."
+else
+	echo
+	echo "NOTE: SWA_NAME not set; skipping Static Web App appsettings configuration."
+fi

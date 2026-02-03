@@ -7,6 +7,7 @@ import { getDevices } from "./functions/http/devices.get";
 import { getSensors } from "./functions/http/sensors.get";
 import { getMeasurements } from "./functions/http/measurements.get";
 import { getHourly } from "./functions/http/hourly.get";
+import { getTrigger } from "./functions/http/trigger.get";
 import { ingest } from "./functions/ingest";
 
 app.timer("aggregates", {
@@ -51,10 +52,17 @@ app.http("measurements", {
 	handler: getMeasurements
 });
 
+
 app.http("hourly", {
 	methods: ["GET"],
 	route: "devices/{deviceId}/sensors/{sensorId}/hourly",
 	handler: getHourly
+});
+
+app.http("trigger", {
+	methods: ["GET"],
+	route: "devices/{deviceId}/sensors/{sensorId}/trigger",
+	handler: getTrigger
 });
 
 app.storageQueue("blob-writer", {

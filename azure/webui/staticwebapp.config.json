@@ -1,19 +1,36 @@
 {
+  "platform": {
+    "apiRuntime": "node:18"
+  },
   "routes": [
     {
       "route": "/.auth/*",
       "allowedRoles": ["anonymous"]
     },
     {
+      "route": "/api/*",
+      "allowedRoles": ["webui" ]
+    },
+    {
       "route": "/*",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": ["webui", "authenticated"]
     }
   ],
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": [
       "/api/*",
-      "/.auth/*"
+      "/.auth/*",
+      "/*.css",
+      "/*.js",
+      "/*.map",
+      "/*.json",
+      "/*.png",
+      "/*.jpg",
+      "/*.jpeg",
+      "/*.svg",
+      "/*.ico",
+      "/assets/*"
     ]
   },
   "responseOverrides": {
