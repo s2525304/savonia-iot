@@ -26,5 +26,13 @@
       "gpio": 17,
       "enumValues": ["OPEN", "CLOSED"]
     }
+    // ,{
+    //   "sensorId": "ruuvi-1",
+    //   "type": "ruuvi_temp",
+    //   "valueType": "number",
+    //   "unit": "C",
+    //   "intervalMs": 60000,
+    //   "address": "aa:bb:cc:dd:ee:ff"
+    // }
   ]
 }

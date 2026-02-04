@@ -1,10 +1,12 @@
 import type { SensorModule } from "./types";
 import RandomTempSensor from "./random-temp";
 import PiCpuTempSensor from "./pi-cpu-temp";
+import RuuviTempSensor from "./ruuvi-temp";
 
 const registry = new Map<string, SensorModule>([
 	[RandomTempSensor.type, RandomTempSensor],
-	[PiCpuTempSensor.type, PiCpuTempSensor]
+	[PiCpuTempSensor.type, PiCpuTempSensor],
+	[RuuviTempSensor.type, RuuviTempSensor]
 ]);
 
 /**

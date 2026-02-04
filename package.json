@@ -20,6 +20,7 @@
     "winston-daily-rotate-file": "^5.0.0"
   },
   "dependencies": {
+    "@abandonware/noble": "^1.9.2-26",
     "@savonia-iot/common": "^1.0.0"
   }
 }
