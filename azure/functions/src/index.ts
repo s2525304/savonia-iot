@@ -8,7 +8,9 @@ import { getSensors } from "./functions/http/sensors.get";
 import { getMeasurements } from "./functions/http/measurements.get";
 import { getHourly } from "./functions/http/hourly.get";
 import { getTrigger } from "./functions/http/trigger.get";
+import { getAlert } from "./functions/http/alert.get";
 import { ingest } from "./functions/ingest";
+import { alert } from "./functions/alert";
 
 app.timer("aggregates", {
 	schedule: loadConfig().aggregates.refreshCron,
@@ -65,6 +67,12 @@ app.http("trigger", {
 	handler: getTrigger
 });
 
+app.http("alert", {
+	methods: ["GET"],
+	route: "alert",
+	handler: getAlert
+});
+
 app.storageQueue("blob-writer", {
 	queueName: "%QUEUE_BLOB_BATCH%",
 	connection: "AzureWebJobsStorage",
@@ -75,4 +83,10 @@ app.storageQueue("timescale-writer", {
 	queueName: "%QUEUE_DB_WRITE%",
 	connection: "AzureWebJobsStorage",
 	handler: runTimescaleWriter
+});
+
+app.storageQueue("alerts", {
+	queueName: "%QUEUE_ALERTS%",
+	connection: "AzureWebJobsStorage",
+	handler: alert
 });

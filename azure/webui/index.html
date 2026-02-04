@@ -23,6 +23,26 @@
     To
     <input type="datetime-local" id="to">
   </label>
+
+  <div class="zoom" id="zoom">
+    <div class="zoom-group" aria-label="Zoom 10 minutes">
+      <span class="zoom-label">10 min</span>
+      <button type="button" id="zoom-in-10m" class="zoom-btn" title="Zoom in to 10 minutes">In</button>
+      <button type="button" id="zoom-out-10m" class="zoom-btn" title="Zoom out by 10 minutes">Out</button>
+    </div>
+
+    <div class="zoom-group" aria-label="Zoom 1 hour">
+      <span class="zoom-label">1 h</span>
+      <button type="button" id="zoom-in-1h" class="zoom-btn" title="Zoom in to 1 hour">In</button>
+      <button type="button" id="zoom-out-1h" class="zoom-btn" title="Zoom out by 1 hour">Out</button>
+    </div>
+
+    <div class="zoom-group" aria-label="Zoom 24 hours">
+      <span class="zoom-label">24 h</span>
+      <button type="button" id="zoom-in-24h" class="zoom-btn" title="Zoom in to 24 hours">In</button>
+      <button type="button" id="zoom-out-24h" class="zoom-btn" title="Zoom out by 24 hours">Out</button>
+    </div>
+  </div>
   <button id="load">Load</button>
   <button id="csv">Download CSV</button>
 
@@ -73,6 +93,23 @@
 
     <div class="hint muted">
       Leave a field empty to remove that bound.
+    </div>
+  </div>
+
+  <div class="alerts" id="alerts">
+    <div class="alerts-header">
+      <strong>Latest alerts</strong>
+      <button id="alerts-refresh" type="button">Refresh</button>
+    </div>
+
+    <div class="alerts-meta muted" id="alerts-meta">
+      Loading…
+    </div>
+
+    <ul class="alerts-list" id="alerts-list" aria-label="Latest alerts"></ul>
+
+    <div class="hint muted">
+      Click an alert to load its time window.
     </div>
   </div>
 </div>

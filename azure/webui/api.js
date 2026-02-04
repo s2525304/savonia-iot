@@ -143,16 +143,26 @@
     }
 
     function normalizeTriggerResponse(resp) {
-        // Accept:
-        // - { alertTrigger: {...} }
-        // - { trigger: {...} }
+        // Normalize backend envelopes to: { min?: number, max?: number } | null
+        // Backend may return:
+        // - { alertTrigger: {...} } or { alertTrigger: null }
+        // - { trigger: {...} } or { trigger: null }
         // - trigger object itself
         if (!resp) return null;
+
         if (typeof resp === "object") {
-            if (resp.alertTrigger && typeof resp.alertTrigger === "object") return resp.alertTrigger;
-            if (resp.trigger && typeof resp.trigger === "object") return resp.trigger;
+            if (Object.prototype.hasOwnProperty.call(resp, "alertTrigger")) {
+                const t = resp.alertTrigger;
+                return t && typeof t === "object" ? t : null;
+            }
+            if (Object.prototype.hasOwnProperty.call(resp, "trigger")) {
+                const t = resp.trigger;
+                return t && typeof t === "object" ? t : null;
+            }
         }
-        return null;
+
+        // If an endpoint ever returns the trigger object directly.
+        return resp && typeof resp === "object" ? resp : null;
     }
 
 
@@ -180,10 +190,10 @@
 
     async function deleteAlertTrigger(deviceId, sensorId) {
         const url = buildUrl(
-            `/api/devices/${encodeURIComponent(deviceId)}/sensors/${encodeURIComponent(sensorId)}/trigger?min=&max=`
+            `/api/devices/${encodeURIComponent(deviceId)}/sensors/${encodeURIComponent(sensorId)}/trigger`
         );
         // If the endpoint returns JSON, return it; otherwise return true.
-        const resp = await fetchJson(url, { method: "GET" });
+        const resp = await fetchJson(url, { method: "DELETE" });
         if (resp === null || resp === "" || resp === undefined) return true;
         return resp;
     }

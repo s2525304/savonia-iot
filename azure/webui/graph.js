@@ -22,6 +22,10 @@
         let lastHourly = null;
         let lastOpts = null;
 
+        // Optional alert trigger bounds (set via opts.trigger or setTrigger)
+        // Shape: { min?: number, max?: number } | null
+        let trigger = null;
+
         function resizeCanvasToDisplaySize() {
             // Make canvas crisp on HiDPI displays
             const dpr = window.devicePixelRatio || 1;
@@ -43,6 +47,10 @@
             const showAvg = legends?.avg?.checked ?? true;
             const showMin = legends?.min?.checked ?? true;
             const showMax = legends?.max?.checked ?? true;
+
+            if (opts && Object.prototype.hasOwnProperty.call(opts, "trigger")) {
+                trigger = opts.trigger ?? null;
+            }
 
             if (!rawRows.length && !hourlyRows.length) {
                 if (legendBox) legendBox.hidden = true;
@@ -90,6 +98,18 @@
                 if (v > maxV) maxV = v;
             }
 
+            // Ensure trigger lines are visible by including them in the y-range.
+            if (trigger) {
+                if (Number.isFinite(trigger.min)) {
+                    if (trigger.min < minV) minV = trigger.min;
+                    if (trigger.min > maxV) maxV = trigger.min;
+                }
+                if (Number.isFinite(trigger.max)) {
+                    if (trigger.max < minV) minV = trigger.max;
+                    if (trigger.max > maxV) maxV = trigger.max;
+                }
+            }
+
             if (minV === maxV) {
                 minV -= 1;
                 maxV += 1;
@@ -125,6 +145,41 @@
             ctx.fillText(`${minV.toFixed(2)}`, 8, padT + plotH);
             ctx.fillText(`${maxV.toFixed(2)}`, 8, padT + 10);
 
+            // X-axis ticks (time)
+            const tickCount = 6;
+            ctx.fillStyle = "#374151";
+            ctx.font = "11px system-ui";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "top";
+
+            for (let i = 0; i < tickCount; i++) {
+                const frac = tickCount === 1 ? 0 : i / (tickCount - 1);
+                const t = minT + frac * (maxT - minT);
+                const px = x(t);
+
+                // tick line
+                ctx.strokeStyle = "#cbd5e1";
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, padT + plotH);
+                ctx.lineTo(px, padT + plotH + 6);
+                ctx.stroke();
+
+                const dt = new Date(t);
+                // If the range spans multiple days, include date; otherwise show time.
+                const spanMs = maxT - minT;
+                const spanDays = spanMs / (24 * 60 * 60 * 1000);
+                const label = spanDays >= 1
+                    ? dt.toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+                    : dt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+                ctx.fillText(label, px, padT + plotH + 8);
+            }
+
+            // Restore defaults for other text
+            ctx.textAlign = "start";
+            ctx.textBaseline = "alphabetic";
+
             function drawLine(points, color, widthPx) {
                 if (points.length < 2) return;
                 ctx.strokeStyle = color;
@@ -146,12 +201,39 @@
             if (showMax) drawLine(pointsMax, "#14b8a6", 1.5);
             if (showAvg) drawLine(pointsAvg, "#2563eb", 2);
 
+            // Alert trigger overlay (dotted red horizontal lines)
+            if (trigger) {
+                ctx.save();
+                ctx.strokeStyle = "#ef4444";
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 6]);
+
+                if (Number.isFinite(trigger.min)) {
+                    const py = y(trigger.min);
+                    ctx.beginPath();
+                    ctx.moveTo(padL, py);
+                    ctx.lineTo(padL + plotW, py);
+                    ctx.stroke();
+                }
+
+                if (Number.isFinite(trigger.max)) {
+                    const py = y(trigger.max);
+                    ctx.beginPath();
+                    ctx.moveTo(padL, py);
+                    ctx.lineTo(padL + plotW, py);
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            }
+
             canvas._series = {
                 raw: showRaw ? pointsRaw : [],
                 avg: showAvg ? pointsAvg : [],
                 min: showMin ? pointsMin : [],
                 max: showMax ? pointsMax : [],
-                scales: { minT, maxT, minV, maxV, padL, padT, plotW, plotH }
+                scales: { minT, maxT, minV, maxV, padL, padT, plotW, plotH },
+                trigger,
             };
         }
 
@@ -196,6 +278,11 @@
 
         function onZoom(cb) {
             onZoomCb = cb;
+        }
+
+        function setTrigger(nextTrigger) {
+            trigger = nextTrigger ?? null;
+            redraw();
         }
 
         // Legend changes -> redraw
@@ -307,7 +394,7 @@
             dragStartX = dragCurrentX = null;
         });
 
-        return { render, redraw, onZoom };
+        return { render, redraw, onZoom, setTrigger };
     }
 
     window.Graph = { createLineGraph };

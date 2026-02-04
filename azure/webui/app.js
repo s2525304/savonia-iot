@@ -58,6 +58,10 @@
 	const triggerSaveButton = document.getElementById("trigger-save");
 	const triggerClearButton = document.getElementById("trigger-clear");
 
+	const alertsRefreshButton = document.getElementById("alerts-refresh");
+	const alertsMeta = document.getElementById("alerts-meta");
+	const alertsList = document.getElementById("alerts-list");
+
 	// { min?: number, max?: number } | null
 	let currentTrigger = null;
 
@@ -84,12 +88,66 @@
 	const fromInput = document.getElementById("from");
 	const toInput = document.getElementById("to");
 
+	const zoomIn10m = document.getElementById("zoom-in-10m");
+	const zoomOut10m = document.getElementById("zoom-out-10m");
+	const zoomIn1h = document.getElementById("zoom-in-1h");
+	const zoomOut1h = document.getElementById("zoom-out-1h");
+	const zoomIn24h = document.getElementById("zoom-in-24h");
+	const zoomOut24h = document.getElementById("zoom-out-24h");
+
 	// sensorId -> sensor metadata (including firstTs/lastTs)
 	const sensorMeta = new Map();
+
+	const SESSION_KEY = "savonia-iot:webui:v1";
+
+	function loadSessionState() {
+		try {
+			const raw = sessionStorage.getItem(SESSION_KEY);
+			if (!raw) return null;
+			const obj = JSON.parse(raw);
+			return obj && typeof obj === "object" ? obj : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function saveSessionState(patch) {
+		try {
+			const prev = loadSessionState() ?? {};
+			const next = { ...prev, ...patch };
+			sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
+		} catch {
+			// ignore
+		}
+	}
+
+	function getCurrentSelectionState() {
+		return {
+			deviceId: deviceSelect.value || null,
+			sensorId: sensorSelect.value || null,
+			from: fromInput.value || null,
+			to: toInput.value || null,
+		};
+	}
 
 	function setButtonsEnabled(enabled) {
 		loadButton.disabled = !enabled;
 		csvButton.disabled = !enabled;
+	}
+
+	async function fetchJson(url) {
+		const res = await fetch(url, { credentials: "same-origin" });
+
+		if (!res.ok) {
+			const text = await res.text().catch(() => "");
+			throw new Error(`API ${res.status}: ${text || res.statusText}`.trim());
+		}
+
+		if (res.status === 204) return null;
+
+		const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+		if (ct.includes("application/json")) return await res.json();
+		return await res.text();
 	}
 
 	function ensureFromToOrder() {
@@ -102,10 +160,289 @@
 		}
 	}
 
+	function getSensorBounds(sensorId) {
+		const meta = sensorMeta.get(sensorId);
+		if (!meta) return null;
+		const min = new Date(meta.firstTs);
+		const max = new Date(meta.lastTs);
+		if (Number.isNaN(min.getTime()) || Number.isNaN(max.getTime())) return null;
+		return { min, max };
+	}
+
+	function computeZoom(from, to, bounds, deltaMs, dir) {
+		// dir: "out" expands window by deltaMs, "in" shrinks window by deltaMs.
+		// Split adjustment equally, but if we hit an edge, give the remaining adjustment to the other side.
+		const half = Math.floor(deltaMs / 2);
+		let left = half;
+		let right = deltaMs - half;
+
+		let newFrom = new Date(from);
+		let newTo = new Date(to);
+
+		if (dir === "out") {
+			newFrom = new Date(from.getTime() - left);
+			newTo = new Date(to.getTime() + right);
+
+			// Clamp to bounds; if we clamp one side, shift the remainder to the other side.
+			if (newFrom < bounds.min) {
+				const overshoot = bounds.min.getTime() - newFrom.getTime();
+				newFrom = new Date(bounds.min);
+				newTo = new Date(newTo.getTime() + overshoot);
+			}
+			if (newTo > bounds.max) {
+				const overshoot = newTo.getTime() - bounds.max.getTime();
+				newTo = new Date(bounds.max);
+				newFrom = new Date(newFrom.getTime() - overshoot);
+			}
+
+			// Final clamp (in case shifting pushed the other side past bounds)
+			if (newFrom < bounds.min) newFrom = new Date(bounds.min);
+			if (newTo > bounds.max) newTo = new Date(bounds.max);
+		} else {
+			// Zoom in: shrink by moving ends inward
+			newFrom = new Date(from.getTime() + left);
+			newTo = new Date(to.getTime() - right);
+
+			// If we'd invert, refuse (signals "can't zoom in anymore")
+			if (newTo.getTime() <= newFrom.getTime()) {
+				return { from, to, changed: false };
+			}
+
+			// Clamp to bounds (should rarely matter for zoom-in)
+			if (newFrom < bounds.min) newFrom = new Date(bounds.min);
+			if (newTo > bounds.max) newTo = new Date(bounds.max);
+
+			if (newTo.getTime() <= newFrom.getTime()) {
+				return { from, to, changed: false };
+			}
+		}
+
+		const changed = newFrom.getTime() !== from.getTime() || newTo.getTime() !== to.getTime();
+		return { from: newFrom, to: newTo, changed };
+	}
+
+	function setFromToDates(from, to) {
+		fromInput.value = toDatetimeLocalValue(from);
+		toInput.value = toDatetimeLocalValue(to);
+		ensureFromToOrder();
+		saveSessionState({ from: fromInput.value || null, to: toInput.value || null });
+	}
+
+	async function applyZoom(deltaMs, dir) {
+		const sensorId = sensorSelect.value;
+		if (!sensorId) return;
+		const bounds = getSensorBounds(sensorId);
+		if (!bounds) return;
+
+		const curFrom = parseDatetimeLocal(fromInput.value);
+		const curTo = parseDatetimeLocal(toInput.value);
+		if (!curFrom || !curTo) return;
+
+		const z = computeZoom(curFrom, curTo, bounds, deltaMs, dir);
+		if (!z.changed) {
+			updateZoomButtons();
+			return;
+		}
+
+		setFromToDates(z.from, z.to);
+
+		// Clamp once more to the sensor bounds (and enforce min/max attributes)
+		applySensorTimeBounds(sensorId);
+
+		updateZoomButtons();
+		await loadAndRender();
+	}
+
+	function canZoom(deltaMs, dir) {
+		const sensorId = sensorSelect.value;
+		if (!sensorId) return false;
+		const bounds = getSensorBounds(sensorId);
+		if (!bounds) return false;
+
+		const curFrom = parseDatetimeLocal(fromInput.value);
+		const curTo = parseDatetimeLocal(toInput.value);
+		if (!curFrom || !curTo) return false;
+
+		const z = computeZoom(curFrom, curTo, bounds, deltaMs, dir);
+		return Boolean(z.changed);
+	}
+
+	function updateZoomButtons() {
+		const d10m = 10 * 60 * 1000;
+		const d1h = 60 * 60 * 1000;
+		const d24h = 24 * 60 * 60 * 1000;
+
+		if (zoomIn10m) zoomIn10m.disabled = !canZoom(d10m, "in");
+		if (zoomOut10m) zoomOut10m.disabled = !canZoom(d10m, "out");
+
+		if (zoomIn1h) zoomIn1h.disabled = !canZoom(d1h, "in");
+		if (zoomOut1h) zoomOut1h.disabled = !canZoom(d1h, "out");
+
+		if (zoomIn24h) zoomIn24h.disabled = !canZoom(d24h, "in");
+		if (zoomOut24h) zoomOut24h.disabled = !canZoom(d24h, "out");
+	}
+
+	function fmtLocal(tsIso) {
+		try {
+			const d = new Date(tsIso);
+			if (Number.isNaN(d.getTime())) return String(tsIso);
+			return d.toLocaleString();
+		} catch {
+			return String(tsIso);
+		}
+	}
+
+	function computeAlertWindow(alertRow) {
+		// Context window around the alert:
+		// - from: start - 5 min
+		// - to: end + 5 min (if closed), otherwise start + 30 min
+		const start = new Date(alertRow.startTs);
+		const end = alertRow.endTs ? new Date(alertRow.endTs) : null;
+
+		const from = new Date(start.getTime() - 5 * 60 * 1000);
+		let to;
+
+		if (end && !Number.isNaN(end.getTime())) {
+			to = new Date(end.getTime() + 5 * 60 * 1000);
+		} else {
+			to = new Date(start.getTime() + 30 * 60 * 1000);
+		}
+
+		return { from, to };
+	}
+
+	function clearAlertsUI(message) {
+		if (alertsMeta) alertsMeta.textContent = message ?? "";
+		if (alertsList) alertsList.innerHTML = "";
+	}
+
+	async function focusAlert(alertRow) {
+		const deviceId = alertRow.deviceId;
+		const sensorId = alertRow.sensorId;
+		if (!deviceId || !sensorId) return;
+
+		// Switch device if needed (loads sensors + metadata)
+		if (deviceSelect.value !== deviceId) {
+			deviceSelect.value = deviceId;
+			await loadSensors(deviceId);
+		}
+
+		// Set the desired time window BEFORE clamping
+		const { from, to } = computeAlertWindow(alertRow);
+		fromInput.value = toDatetimeLocalValue(from);
+		toInput.value = toDatetimeLocalValue(to);
+
+		// Select sensor if available and clamp to sensor bounds
+		if (sensorMeta.has(sensorId)) {
+			sensorSelect.value = sensorId;
+			applySensorTimeBounds(sensorId);
+
+			fromInput.disabled = false;
+			toInput.disabled = false;
+			setButtonsEnabled(true);
+
+			await loadTrigger(deviceId, sensorId);
+			await loadAndRender();
+			saveSessionState(getCurrentSelectionState());
+		} else {
+			alert(`Sensor '${sensorId}' not found for device '${deviceId}'`);
+		}
+
+		chartCanvas?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+	}
+
+	function renderAlerts(items) {
+		if (!alertsList) return;
+		alertsList.innerHTML = "";
+
+		for (const a of items) {
+			const li = document.createElement("li");
+			li.className = "alerts-item";
+			li.tabIndex = 0;
+
+			const main = document.createElement("div");
+			main.className = "alerts-main";
+
+			const title = document.createElement("div");
+			title.className = "alerts-title";
+			title.textContent = `${a.deviceId} / ${a.sensorId}`;
+
+			const sub = document.createElement("div");
+			sub.className = "alerts-sub";
+			sub.textContent = a.endTs
+				? `${fmtLocal(a.startTs)} → ${fmtLocal(a.endTs)}`
+				: `${fmtLocal(a.startTs)} → (open)`;
+
+			const reason = document.createElement("div");
+			reason.className = "alerts-reason";
+			reason.textContent = a.reason || "(no reason)";
+
+			main.appendChild(title);
+			main.appendChild(sub);
+			main.appendChild(reason);
+
+			const side = document.createElement("div");
+			side.className = "alerts-side";
+
+			const badge = document.createElement("span");
+			badge.className = `alert-badge ${a.endTs ? "closed" : "open"}`;
+			badge.textContent = a.endTs ? "Closed" : "Open";
+
+			const updated = document.createElement("div");
+			updated.className = "alert-time";
+			updated.textContent = `Updated ${fmtLocal(a.updatedAt)}`;
+
+			side.appendChild(badge);
+			side.appendChild(updated);
+
+			li.appendChild(main);
+			li.appendChild(side);
+
+			const onActivate = async () => {
+				try {
+					await focusAlert(a);
+				} catch (err) {
+					console.error(err);
+					alert(err instanceof Error ? err.message : String(err));
+				}
+			};
+
+			li.addEventListener("click", onActivate);
+			li.addEventListener("keydown", (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onActivate();
+				}
+			});
+
+			alertsList.appendChild(li);
+		}
+	}
+
+	async function loadAlertsLatest() {
+		if (!alertsMeta || !alertsList) return;
+
+		alertsMeta.textContent = "Loading…";
+		if (alertsRefreshButton) alertsRefreshButton.disabled = true;
+
+		try {
+			const data = await fetchJson("/api/alert?limit=25");
+			const items = data?.items ?? [];
+			renderAlerts(items);
+			alertsMeta.textContent = `Showing ${items.length} alerts • ${new Date().toLocaleTimeString()}`;
+		} catch (err) {
+			console.error("Failed to load alerts", err);
+			clearAlertsUI("Failed to load alerts");
+		} finally {
+			if (alertsRefreshButton) alertsRefreshButton.disabled = false;
+		}
+	}
+
 	graph.onZoom(async (tFrom, tTo) => {
 		fromInput.value = toDatetimeLocalValue(new Date(tFrom));
 		toInput.value = toDatetimeLocalValue(new Date(tTo));
 		ensureFromToOrder();
+		saveSessionState({ from: fromInput.value || null, to: toInput.value || null });
 		await loadAndRender();
 	});
 
@@ -122,18 +459,30 @@
 		toInput.min = toDatetimeLocalValue(min);
 		toInput.max = toDatetimeLocalValue(max);
 
-		// Default: last 6 hours (clamped to min)
-		const defaultTo = new Date(max);
-		const defaultFrom = new Date(max);
-		defaultFrom.setHours(defaultFrom.getHours() - 6);
+		// Preserve existing from/to if user already has selections; otherwise use defaults.
+		const curFrom = parseDatetimeLocal(fromInput.value);
+		const curTo = parseDatetimeLocal(toInput.value);
 
-		const fromClamped = clampDate(defaultFrom, min, max);
-		const toClamped = clampDate(defaultTo, min, max);
+		if (curFrom && curTo) {
+			const fromClamped = clampDate(curFrom, min, max);
+			const toClamped = clampDate(curTo, min, max);
+			fromInput.value = toDatetimeLocalValue(fromClamped);
+			toInput.value = toDatetimeLocalValue(toClamped);
+		} else {
+			// Default: last 6 hours (clamped to min)
+			const defaultTo = new Date(max);
+			const defaultFrom = new Date(max);
+			defaultFrom.setHours(defaultFrom.getHours() - 6);
 
-		fromInput.value = toDatetimeLocalValue(fromClamped);
-		toInput.value = toDatetimeLocalValue(toClamped);
+			const fromClamped = clampDate(defaultFrom, min, max);
+			const toClamped = clampDate(defaultTo, min, max);
+
+			fromInput.value = toDatetimeLocalValue(fromClamped);
+			toInput.value = toDatetimeLocalValue(toClamped);
+		}
 
 		ensureFromToOrder();
+		updateZoomButtons();
 	}
 
 	function formatTriggerStatus(trigger) {
@@ -271,6 +620,8 @@
 				title: `${sensorId}${unit}`,
 				trigger: currentTrigger
 			});
+			saveSessionState(getCurrentSelectionState());
+			await loadAlertsLatest();
 		} catch (err) {
 			console.error(err);
 			alert(err instanceof Error ? err.message : String(err));
@@ -377,6 +728,7 @@
 			if (sensors.length > 0) {
 				sensorSelect.value = sensors[0].sensorId;
 				applySensorTimeBounds(sensors[0].sensorId);
+				updateZoomButtons();
 				fromInput.disabled = false;
 				toInput.disabled = false;
 				setButtonsEnabled(true);
@@ -386,6 +738,7 @@
 				setButtonsEnabled(false);
 				triggerBox.hidden = true;
 				currentTrigger = null;
+				updateZoomButtons();
 			}
 		} catch (err) {
 			console.error("Failed to load sensors", err);
@@ -403,9 +756,11 @@
 			setButtonsEnabled(false);
 			triggerBox.hidden = true;
 			currentTrigger = null;
+			saveSessionState({ deviceId: null, sensorId: null });
 			return;
 		}
 		loadSensors(deviceId);
+		saveSessionState({ deviceId, sensorId: null, from: fromInput.value || null, to: toInput.value || null });
 	});
 
 	sensorSelect.addEventListener("change", async () => {
@@ -415,9 +770,12 @@
 			toInput.disabled = true;
 			triggerBox.hidden = true;
 			currentTrigger = null;
+			saveSessionState({ sensorId: null });
 			return;
 		}
 		applySensorTimeBounds(sensorId);
+		updateZoomButtons();
+		saveSessionState({ sensorId, from: fromInput.value || null, to: toInput.value || null });
 		fromInput.disabled = false;
 		toInput.disabled = false;
 		setButtonsEnabled(true);
@@ -427,10 +785,14 @@
 
 	fromInput.addEventListener("change", () => {
 		ensureFromToOrder();
+		saveSessionState({ from: fromInput.value || null, to: toInput.value || null });
+		updateZoomButtons();
 	});
 
 	toInput.addEventListener("change", () => {
 		ensureFromToOrder();
+		saveSessionState({ from: fromInput.value || null, to: toInput.value || null });
+		updateZoomButtons();
 	});
 
 	loadButton.addEventListener("click", async () => {
@@ -441,6 +803,19 @@
 		await downloadCsv();
 	});
 
+	zoomIn10m?.addEventListener("click", async () => { await applyZoom(10 * 60 * 1000, "in"); });
+	zoomOut10m?.addEventListener("click", async () => { await applyZoom(10 * 60 * 1000, "out"); });
+
+	zoomIn1h?.addEventListener("click", async () => { await applyZoom(60 * 60 * 1000, "in"); });
+	zoomOut1h?.addEventListener("click", async () => { await applyZoom(60 * 60 * 1000, "out"); });
+
+	zoomIn24h?.addEventListener("click", async () => { await applyZoom(24 * 60 * 60 * 1000, "in"); });
+	zoomOut24h?.addEventListener("click", async () => { await applyZoom(24 * 60 * 60 * 1000, "out"); });
+
+	alertsRefreshButton?.addEventListener("click", async () => {
+		await loadAlertsLatest();
+	});
+
 	triggerSaveButton.addEventListener("click", async () => {
 		await saveTrigger();
 	});
@@ -449,6 +824,45 @@
 		await clearTrigger();
 	});
 
+	async function restoreSelectionsFromSession() {
+		const st = loadSessionState();
+		if (!st) return;
+
+		// Restore device if present
+		if (st.deviceId) {
+			deviceSelect.value = st.deviceId;
+			await loadSensors(st.deviceId);
+
+			// Restore sensor if present and exists
+			if (st.sensorId && sensorMeta.has(st.sensorId)) {
+				sensorSelect.value = st.sensorId;
+				applySensorTimeBounds(st.sensorId);
+			}
+		}
+
+		// Restore from/to if present
+		if (st.from) fromInput.value = st.from;
+		if (st.to) toInput.value = st.to;
+
+		// Clamp after restoring values
+		if (st.sensorId && sensorMeta.has(st.sensorId)) {
+			applySensorTimeBounds(st.sensorId);
+		}
+
+		ensureFromToOrder();
+		updateZoomButtons();
+
+		// If we have a full selection, load trigger + data.
+		const sel = getCurrentSelectionState();
+		if (sel.deviceId && sel.sensorId && sel.from && sel.to) {
+			await loadTrigger(sel.deviceId, sel.sensorId);
+			await loadAndRender();
+		}
+	}
+
 	await loadDevices();
-	setButtonsEnabled(false);
+	await restoreSelectionsFromSession();
+	await loadAlertsLatest();
+	updateZoomButtons();
+	setButtonsEnabled(Boolean(deviceSelect.value && sensorSelect.value));
 })();

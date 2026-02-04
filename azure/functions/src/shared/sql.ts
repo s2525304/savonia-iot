@@ -146,6 +146,230 @@ export const Sql = {
 		AND sensor_id = $2;`,
 
 	/**
+	 * Reads the enabled alert trigger for a device+sensor.
+	 */
+	selectEnabledAlertTriggerByDeviceSensor: `SELECT
+		id AS "id",
+		min_value AS "minValue",
+		max_value AS "maxValue",
+		enabled AS "enabled"
+	FROM alert_triggers
+	WHERE device_id = $1
+		AND sensor_id = $2
+		AND enabled = TRUE
+	LIMIT 1;`,
+
+	/**
+	 * Reads the currently open alert for a trigger (end_ts IS NULL).
+	 */
+	selectOpenAlertByTriggerId: `SELECT
+		id AS "id",
+		trigger_id AS "triggerId",
+		device_id AS "deviceId",
+		sensor_id AS "sensorId",
+		start_ts AS "startTs",
+		end_ts AS "endTs",
+		reason AS "reason",
+		context AS "context"
+	FROM alerts
+	WHERE trigger_id = $1
+		AND end_ts IS NULL
+	ORDER BY start_ts ASC
+	LIMIT 1;`,
+
+	/**
+	 * Inserts a new alert row.
+	 * Params: $1 triggerId, $2 deviceId, $3 sensorId, $4 startTs, $5 reason, $6 context(jsonb)
+	 */
+	insertAlert: `INSERT INTO alerts (
+		trigger_id,
+		device_id,
+		sensor_id,
+		start_ts,
+		reason,
+		context,
+		updated_at
+	)
+	VALUES ($1, $2, $3, $4::timestamptz, $5, $6::jsonb, NOW())
+	RETURNING id;`,
+
+	/**
+	 * Updates an open alert's context (used to store lastOutOfBoundsTs) and bumps updated_at.
+	 * Params: $1 alertId, $2 context(jsonb)
+	 */
+	updateAlertContext: `UPDATE alerts
+	SET context = $2::jsonb,
+		updated_at = NOW()
+	WHERE id = $1;`,
+
+	/**
+	 * Closes an alert by setting end_ts to the provided measurement timestamp.
+	 * Params: $1 alertId, $2 endTs
+	 */
+	closeAlert: `UPDATE alerts
+	SET end_ts = $2::timestamptz,
+		updated_at = NOW()
+	WHERE id = $1
+		AND end_ts IS NULL;`,
+
+	/**
+	 * List currently open alerts (end_ts IS NULL) across all devices/sensors.
+	 * Ordered by newest first.
+	 */
+	selectOpenAlertsAll: `SELECT
+		a.id AS "id",
+		a.trigger_id AS "triggerId",
+		a.device_id AS "deviceId",
+		a.sensor_id AS "sensorId",
+		a.start_ts AS "startTs",
+		a.end_ts AS "endTs",
+		a.reason AS "reason",
+		a.context AS "context",
+		a.created_at AS "createdAt",
+		a.updated_at AS "updatedAt",
+		t.name AS "triggerName",
+		t.min_value AS "minValue",
+		t.max_value AS "maxValue",
+		t.enabled AS "triggerEnabled"
+	FROM alerts a
+	JOIN alert_triggers t
+		ON t.id = a.trigger_id
+	WHERE a.end_ts IS NULL
+	ORDER BY a.start_ts DESC, a.id DESC
+	LIMIT $1::int;`,
+
+	/**
+	 * List currently open alerts (end_ts IS NULL) for a device.
+	 */
+	selectOpenAlertsByDevice: `SELECT
+		a.id AS "id",
+		a.trigger_id AS "triggerId",
+		a.device_id AS "deviceId",
+		a.sensor_id AS "sensorId",
+		a.start_ts AS "startTs",
+		a.end_ts AS "endTs",
+		a.reason AS "reason",
+		a.context AS "context",
+		a.created_at AS "createdAt",
+		a.updated_at AS "updatedAt",
+		t.name AS "triggerName",
+		t.min_value AS "minValue",
+		t.max_value AS "maxValue",
+		t.enabled AS "triggerEnabled"
+	FROM alerts a
+	JOIN alert_triggers t
+		ON t.id = a.trigger_id
+	WHERE a.device_id = $1
+		AND a.end_ts IS NULL
+	ORDER BY a.start_ts DESC, a.id DESC
+	LIMIT $2::int;`,
+
+	/**
+	 * List currently open alerts (end_ts IS NULL) for a device+sensor.
+	 */
+	selectOpenAlertsByDeviceSensor: `SELECT
+		a.id AS "id",
+		a.trigger_id AS "triggerId",
+		a.device_id AS "deviceId",
+		a.sensor_id AS "sensorId",
+		a.start_ts AS "startTs",
+		a.end_ts AS "endTs",
+		a.reason AS "reason",
+		a.context AS "context",
+		a.created_at AS "createdAt",
+		a.updated_at AS "updatedAt",
+		t.name AS "triggerName",
+		t.min_value AS "minValue",
+		t.max_value AS "maxValue",
+		t.enabled AS "triggerEnabled"
+	FROM alerts a
+	JOIN alert_triggers t
+		ON t.id = a.trigger_id
+	WHERE a.device_id = $1
+		AND a.sensor_id = $2
+		AND a.end_ts IS NULL
+	ORDER BY a.start_ts DESC, a.id DESC
+	LIMIT $3::int;`,
+
+	/**
+	 * List latest alerts across all devices/sensors.
+	 * IMPORTANT: open alerts have priority and are listed before any closed alerts.
+	 */
+	selectLatestAlertsAll: `SELECT
+		a.id AS "id",
+		a.trigger_id AS "triggerId",
+		a.device_id AS "deviceId",
+		a.sensor_id AS "sensorId",
+		a.start_ts AS "startTs",
+		a.end_ts AS "endTs",
+		a.reason AS "reason",
+		a.context AS "context",
+		a.created_at AS "createdAt",
+		a.updated_at AS "updatedAt",
+		t.name AS "triggerName",
+		t.min_value AS "minValue",
+		t.max_value AS "maxValue",
+		t.enabled AS "triggerEnabled"
+	FROM alerts a
+	JOIN alert_triggers t
+		ON t.id = a.trigger_id
+	ORDER BY (a.end_ts IS NULL) DESC, a.updated_at DESC, a.start_ts DESC, a.id DESC
+	LIMIT $1::int;`,
+
+	/**
+	 * List latest alerts for a device.
+	 * IMPORTANT: open alerts have priority and are listed before any closed alerts.
+	 */
+	selectLatestAlertsByDevice: `SELECT
+		a.id AS "id",
+		a.trigger_id AS "triggerId",
+		a.device_id AS "deviceId",
+		a.sensor_id AS "sensorId",
+		a.start_ts AS "startTs",
+		a.end_ts AS "endTs",
+		a.reason AS "reason",
+		a.context AS "context",
+		a.created_at AS "createdAt",
+		a.updated_at AS "updatedAt",
+		t.name AS "triggerName",
+		t.min_value AS "minValue",
+		t.max_value AS "maxValue",
+		t.enabled AS "triggerEnabled"
+	FROM alerts a
+	JOIN alert_triggers t
+		ON t.id = a.trigger_id
+	WHERE a.device_id = $1
+	ORDER BY (a.end_ts IS NULL) DESC, a.updated_at DESC, a.start_ts DESC, a.id DESC
+	LIMIT $2::int;`,
+
+	/**
+	 * List latest alerts for a device+sensor.
+	 * IMPORTANT: open alerts have priority and are listed before any closed alerts.
+	 */
+	selectLatestAlertsByDeviceSensor: `SELECT
+		a.id AS "id",
+		a.trigger_id AS "triggerId",
+		a.device_id AS "deviceId",
+		a.sensor_id AS "sensorId",
+		a.start_ts AS "startTs",
+		a.end_ts AS "endTs",
+		a.reason AS "reason",
+		a.context AS "context",
+		a.created_at AS "createdAt",
+		a.updated_at AS "updatedAt",
+		t.name AS "triggerName",
+		t.min_value AS "minValue",
+		t.max_value AS "maxValue",
+		t.enabled AS "triggerEnabled"
+	FROM alerts a
+	JOIN alert_triggers t
+		ON t.id = a.trigger_id
+	WHERE a.device_id = $1
+		AND a.sensor_id = $2
+	ORDER BY (a.end_ts IS NULL) DESC, a.updated_at DESC, a.start_ts DESC, a.id DESC
+	LIMIT $3::int;`,
+
+	/**
 	 * Build hourly aggregates query for a device and sensor within a time range.
 	 *
 	 * @param whereCursorSql  Additional cursor clause starting with "AND ..." or empty string.
