@@ -15,9 +15,6 @@ export interface AggregatesConfig {
 export interface HttpAuthConfig {
 	apiKey: string;
 	allowedUsers: string[];
-	jwtIssuer: string;
-	jwtAudience: string;
-	jwksUri: string;
 }
 
 export interface BlobWriterConfig {
@@ -115,10 +112,7 @@ export function loadConfig(): AppConfig {
 		},
 		httpAuth: {
 			apiKey: requireEnv("HTTP_API_KEY"),
-			allowedUsers: optionalStringArrayEnv("HTTP_ALLOWED_USERS"),
-			jwtIssuer: requireEnv("HTTP_JWT_ISSUER"),
-			jwtAudience: requireEnv("HTTP_JWT_AUDIENCE"),
-			jwksUri: requireEnv("HTTP_JWKS_URI")
+			allowedUsers: optionalStringArrayEnv("HTTP_ALLOWED_USERS")
 		}
 	};
 }

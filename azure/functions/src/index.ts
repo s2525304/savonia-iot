@@ -29,9 +29,9 @@ app.timer("aggregates", {
 
 
 app.eventHub("ingest", {
-	eventHubName: "%EVENTHUB_NAME%",
-	connection: "EVENTHUB_CONNECTION_STRING",
-	consumerGroup: "%EVENTHUB_CONSUMERGROUP%",
+	eventHubName: "%IOTHUB_EVENTHUB_NAME%",
+	connection: "IOTHUB_EVENTHUB_CONNECTION_STRING",
+	consumerGroup: "$Default",
 	cardinality: "many",
 	handler: ingest
 });

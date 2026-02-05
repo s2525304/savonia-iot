@@ -14,9 +14,10 @@ import type { TelemetryMessage } from "../shared/eventhub/telemetry";
 //
 // Env vars (Function App settings):
 // - COLD_STORAGE_CONNECTION_STRING (required)
-// - COLD_STORAGE_CONTAINER (optional, default: telemetry-archive)
-// - COLD_STORAGE_GZIP (optional: true|false, default: true) - ignored in append-blob mode
-// - COLD_STORAGE_PREFIX (optional, default: telemetry)
+// - COLD_CONTAINER (required)
+// - COLD_PREFIX (optional, default: telemetry)
+// - COLD_GZIP (optional: true|false, default: false) - ignored in append-blob mode
+// - BLOB_WRITE_CONCURRENCY (optional, default: 8)
 //
 // Blobs are written as .jsonl append blobs, grouped by deviceId + sensorId + hour (UTC).
 // Gzip compression is ignored in append-blob mode.
@@ -102,12 +103,9 @@ export async function runBlobWriter(queueItem: unknown, context: InvocationConte
 		byPartition.set(key, arr);
 	}
 
-	let appended = 0;
-	let failed = 0;
-
 	const CONCURRENCY = Number.parseInt(process.env.BLOB_WRITE_CONCURRENCY ?? "8", 10) || 8;
 
-	await pMap(
+	const results = await pMap(
 		Array.from(byPartition.entries()),
 		async ([key, batch]) => {
 			// NDJSON (uncompressed to allow append)
@@ -127,14 +125,17 @@ export async function runBlobWriter(queueItem: unknown, context: InvocationConte
 				});
 
 				await blob.appendBlock(data, data.length);
-				appended += batch.length;
+				return { appended: batch.length, failed: 0 };
 			} catch (err) {
-				failed += batch.length;
 				log.error("blob-writer: append failed", { blobName, err: String(err) });
+				return { appended: 0, failed: batch.length };
 			}
 		},
 		{ concurrency: CONCURRENCY }
 	);
+
+	const appended = results.reduce((sum, r) => sum + r.appended, 0);
+	const failed = results.reduce((sum, r) => sum + r.failed, 0);
 
 	log.info("blob-writer: done", {
 		received: messages.length,
