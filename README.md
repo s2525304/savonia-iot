@@ -188,6 +188,213 @@ Azure Functions -kokonaisuus (esimerkkitasolla):
 - `blob-writer` (jonosta → Blob Storage)
 - `src/functions/http/*` (REST API Web UI:lle)
 
+### HTTP API (Azure Functions)
+
+Web UI käyttää Azure Functionien tarjoamaa HTTP REST -rajapintaa. Rajapinnan base path on **`/api`** (Static Web Apps proxyn kautta) ja se tukee sekä JSON- että CSV-vastauksia.
+
+#### Autentikointi (shared secret)
+
+Rajapinta on suojattu ja vaatii **shared secret** -avaimen.
+
+- Header (suositus): `x-api-key: <SECRET>`
+- Vaihtoehtoisesti query-parametrina: `?code=<SECRET>`
+
+#### CSV-vastaus
+
+Useimmat endpointit tukevat CSV-muotoa. Käytä:
+
+- `?format=csv` (esim. mittaukset, hourly, alert)
+
+Joissain endpointeissa CSV valitaan yleisemmällä muodolla (toteutustavasta riippuen), mutta Web UI käyttää käytännössä `format=csv`.
+
+---
+
+#### 1) Listaa laitteet
+
+`GET /api/devices`
+
+Palauttaa laitteet, joilla on havaittua telemetriaa.
+
+**JSON response**
+
+```json
+{ "devices": [ { "deviceId": "pi-01", "location": "livingroom" } ] }
+```
+
+CSV: `?format=csv`
+
+---
+
+#### 2) Listaa laitteen sensorit
+
+`GET /api/devices/{deviceId}/sensors`
+
+Palauttaa sensoreiden metatiedot ja aikavälin (first/last) sekä havaintojen määrän.
+
+**JSON response**
+
+```json
+{ "deviceId": "pi-01", "sensors": [ { "sensorId": "pi-cpu-temp", "type": "pi_cpu_temp", "unit": "C", "location": "livingroom", "firstTs": "...", "lastTs": "...", "count": 123 } ] }
+```
+
+CSV: `?format=csv`
+
+---
+
+#### 3) Hae mittaukset
+
+`GET /api/devices/{deviceId}/sensors/{sensorId}/measurements?from&to&limit&afterTs&afterSeq&format`
+
+Palauttaa raakamittaukset aikaväliltä.
+
+**Query-parametrit**
+- `from` / `to` (ISO8601, esim. `2026-01-29T12:00:00Z`). Jos puuttuu, backend käyttää turvallista oletusikkunaa.
+- `limit` (oletus 1000, max 5000)
+- `afterTs` + `afterSeq` (cursor-paginointi)
+- `format=csv` (valinnainen)
+
+**JSON response**
+
+```json
+{
+  "deviceId": "pi-01",
+  "sensorId": "pi-cpu-temp",
+  "from": "...",
+  "to": "...",
+  "limit": 1000,
+  "hasMore": false,
+  "nextCursor": null,
+  "items": [ ["2026-01-29T12:00:00Z", 1, 45.21] ]
+}
+```
+
+**Huom:** `items` on tiivis taulukkomuoto: `[ts, seq, value]`.
+
+---
+
+#### 4) Hae tuntiaggregaatti (hourly)
+
+`GET /api/devices/{deviceId}/sensors/{sensorId}/hourly?from&to&limit&afterTs&afterSeq&format`
+
+Palauttaa tuntikohtaiset aggregaatit (materialized view), esimerkiksi keskiarvo/min/max ja näytemäärä.
+
+**Query-parametrit**
+- `from` / `to` (ISO)
+- `limit` (oletus 1000, max 5000)
+- `afterTs` (+ `afterSeq` hyväksytään mutta hourly-rajapinnassa `afterSeq` ei vaikuta)
+- `format=csv` (valinnainen)
+
+**JSON response**
+
+```json
+{
+  "deviceId": "pi-01",
+  "sensorId": "pi-cpu-temp",
+  "from": "...",
+  "to": "...",
+  "limit": 1000,
+  "hasMore": false,
+  "nextCursor": null,
+  "items": [ ["2026-01-29T12:00:00Z", 45.1, 44.0, 46.2, 60] ]
+}
+```
+
+**Huom:** `items` on tiivis taulukkomuoto: `[bucketTs, avg, min, max, samples]`.
+
+---
+
+#### 5) Hae / aseta alert trigger (min/max)
+
+`GET /api/devices/{deviceId}/sensors/{sensorId}/trigger?min&max`
+
+Trigger on sallittu vain numeerisille sensoreille.
+
+**Lukutila** (ei `min`/`max` parametreja):
+- Palauttaa nykyisen triggerin.
+- Jos triggeriä ei ole, `alertTrigger` on `null`.
+
+**Asetustila** (jos `min` tai `max` annetaan):
+- Jos parametri on annettu → arvo asetetaan.
+- Jos parametri puuttuu → kyseinen raja tyhjennetään (NULL).
+- Jos sekä `min` että `max` tyhjennetään → trigger poistetaan.
+
+**JSON response**
+
+```json
+{ "deviceId": "pi-01", "sensorId": "pi-cpu-temp", "alertTrigger": { "max": 24 } }
+```
+
+---
+
+#### 6) Hae alertit
+
+`GET /api/alert?device_id&sensor_id&open&limit&format`
+
+Listaa alertit.
+
+**Query-parametrit**
+- `device_id` (valinnainen)
+- `sensor_id` (valinnainen; vaatii `device_id`)
+- `open` (valinnainen boolean: `true/false` tai `1/0`)
+- `limit` (oletus 50, max 500)
+- `format=csv` (valinnainen)
+
+**Semantiikka**
+- Jos `open=true` → palauttaa vain avoimet alertit.
+- Muuten → palauttaa viimeisimmät alertit siten, että **avoimet alertit tulevat aina ensin** (ennen suljettuja).
+
+**JSON response**
+
+```json
+{
+  "deviceId": null,
+  "sensorId": null,
+  "openOnly": false,
+  "limit": 50,
+  "count": 1,
+  "items": [
+    {
+      "id": 123,
+      "triggerId": 10,
+      "deviceId": "pi-01",
+      "sensorId": "pi-cpu-temp",
+      "startTs": "...",
+      "endTs": null,
+      "reason": "...",
+      "context": { "value": 28.1 },
+      "createdAt": "...",
+      "updatedAt": "...",
+      "triggerName": "...",
+      "minValue": null,
+      "maxValue": 24,
+      "triggerEnabled": true
+    }
+  ],
+  "format": "json"
+}
+```
+
+---
+
+#### Esimerkkikutsut (curl)
+
+```bash
+# Devices
+curl -H "x-api-code: $API_CODE" "https://<YOUR-SWA-URL>/api/devices"
+
+# Measurements JSON
+curl -H "x-api-code: $API_CODE" "https://<YOUR-SWA-URL>/api/devices/pi-01/sensors/pi-cpu-temp/measurements?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z&limit=1000"
+
+# Measurements CSV
+curl -H "x-api-code: $API_CODE" "https://<YOUR-SWA-URL>/api/devices/pi-01/sensors/pi-cpu-temp/measurements?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z&format=csv" -o measurements.csv
+
+# Trigger: set max=24
+curl -H "x-api-code: $API_CODE" "https://<YOUR-SWA-URL>/api/devices/pi-01/sensors/pi-cpu-temp/trigger?max=24"
+
+# Alerts: open only
+curl -H "x-api-code: $API_CODE" "https://<YOUR-SWA-URL>/api/alert?open=true&limit=50"
+```
+
 ### Hakemistorakenne (Azure)
 
 Azure-koodi sijaitsee repossa hakemistossa **`<reporoot>/azure`**:
