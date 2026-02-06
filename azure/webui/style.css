@@ -130,41 +130,57 @@ h1 {
 	font-size: 0.85rem;
 }
 
-@media (max-width: 600px) {
-	.trigger-fields {
-		align-items: stretch;
-	}
-
-	.trigger-fields label,
-	.trigger-fields input[type="number"],
-	#trigger-save,
-	#trigger-clear {
-		width: 100%;
-	}
-}
-
-/* Auth status */
-#auth-status {
-	margin-bottom: 16px;
-	padding: 10px 12px;
-	background: #eef2ff;
-	border: 1px solid #c7d2fe;
-	border-radius: 6px;
-	color: #3730a3;
-	max-width: 720px;
-}
-
-/* App container */
-#app {
-	max-width: 900px;
-	background: #ffffff;
-	border: 1px solid #e5e7eb;
-	border-radius: 8px;
-	padding: 16px;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
 /* Controls layout */
+.controls {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-bottom: 12px;
+}
+
+.control-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	align-items: flex-end;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 220px;
+	flex: 1 1 220px;
+}
+
+.field-label {
+	font-size: 0.8rem;
+	color: #374151;
+}
+
+/* Inputs inside the new controls */
+.controls select,
+.controls input[type="datetime-local"],
+.controls input[type="text"],
+.controls input[type="number"] {
+	padding: 6px 8px;
+	border-radius: 6px;
+	border: 1px solid #d1d5db;
+	background: #ffffff;
+	color: #111827;
+	font-size: 0.9rem;
+	width: 100%;
+}
+
+/* Action buttons row */
+.controls .actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	align-items: center;
+}
+
+/* Backward-compat: keep old direct-children layout working if present */
 #app > label {
 	margin-right: 8px;
 	margin-bottom: 12px;
@@ -198,15 +214,32 @@ h1 {
 	font-size: 0.9rem;
 }
 
+@media (max-width: 600px) {
+	.control-row {
+		gap: 10px;
+	}
+
+	.field {
+		min-width: 0;
+		flex: 1 1 100%;
+	}
+
+	.controls .actions {
+		width: 100%;
+	}
+
+	.controls .actions button {
+		width: 100%;
+	}
+}
+
 /* Zoom controls */
 .zoom {
-	display: inline-flex;
+	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
 	align-items: center;
-	margin-right: 8px;
-	margin-bottom: 12px;
-	vertical-align: top;
+	margin: 12px 0 8px 0;
 }
 
 .zoom-group {
@@ -283,7 +316,7 @@ button:disabled {
 /* Chart */
 #chart {
 	display: block;
-	margin-top: 16px;
+	margin-top: 8px;
 	width: 100%;
 	max-height: 420px;
 }
@@ -294,6 +327,7 @@ button:disabled {
 		padding: 12px;
 	}
 
+	#app > label,
 	#app > select,
 	#app > input[type="datetime-local"],
 	#app > button {

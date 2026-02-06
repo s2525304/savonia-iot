@@ -100,6 +100,13 @@
 
 	const SESSION_KEY = "savonia-iot:webui:v1";
 
+	let isRefreshingFromCacheEvent = false;
+
+	function safeHasOption(selectEl, value) {
+		if (!selectEl || !value) return false;
+		return Array.from(selectEl.options ?? []).some(o => o && o.value === value);
+	}
+
 	function loadSessionState() {
 		try {
 			const raw = sessionStorage.getItem(SESSION_KEY);
@@ -746,6 +753,101 @@
 		}
 	}
 
+	// --- UI refresh helpers for cache events ---
+	async function refreshUiKeepingSelection(opts) {
+		// opts: { deviceId?: string|null, sensorId?: string|null, keepFromTo?: boolean }
+		const prev = getCurrentSelectionState();
+		const targetDeviceId = opts?.deviceId ?? prev.deviceId;
+		const targetSensorId = opts?.sensorId ?? prev.sensorId;
+		const keepFromTo = opts?.keepFromTo !== false;
+
+		// Preserve from/to (these are session-driven and should stay stable if possible)
+		const prevFrom = prev.from;
+		const prevTo = prev.to;
+
+		await loadDevices();
+
+		if (targetDeviceId && safeHasOption(deviceSelect, targetDeviceId)) {
+			deviceSelect.value = targetDeviceId;
+			await loadSensors(targetDeviceId);
+
+			if (targetSensorId && sensorMeta.has(targetSensorId) && safeHasOption(sensorSelect, targetSensorId)) {
+				sensorSelect.value = targetSensorId;
+				applySensorTimeBounds(targetSensorId);
+			}
+		}
+
+		if (keepFromTo) {
+			if (prevFrom) fromInput.value = prevFrom;
+			if (prevTo) toInput.value = prevTo;
+		}
+
+		// Clamp restored from/to to sensor bounds if we have a sensor selected.
+		const selSensor = sensorSelect.value;
+		if (selSensor && sensorMeta.has(selSensor)) {
+			applySensorTimeBounds(selSensor);
+		}
+
+		ensureFromToOrder();
+		updateZoomButtons();
+
+		const sel = getCurrentSelectionState();
+		setButtonsEnabled(Boolean(sel.deviceId && sel.sensorId));
+
+		// If we still have a valid full selection, refresh trigger + graph.
+		if (sel.deviceId && sel.sensorId && sel.from && sel.to) {
+			await loadTrigger(sel.deviceId, sel.sensorId);
+			await loadAndRender();
+		}
+	}
+
+	function installCacheRefreshListeners() {
+		// If ApiCache exists, prefer UI-driven refresh (no full page reload).
+		if (window.ApiCache && typeof window.ApiCache === "object") {
+			try {
+				window.ApiCache.autoReloadOnChange = false;
+			} catch {
+				// ignore
+			}
+		}
+
+		window.addEventListener("api:devicesUpdated", async () => {
+			if (isRefreshingFromCacheEvent) return;
+			isRefreshingFromCacheEvent = true;
+			try {
+				// Devices list changed; reload devices and keep current selection if possible.
+				await refreshUiKeepingSelection({ keepFromTo: true });
+			} catch (err) {
+				console.error("devices cache refresh failed", err);
+			} finally {
+				isRefreshingFromCacheEvent = false;
+			}
+		});
+
+		window.addEventListener("api:sensorsUpdated", async (ev) => {
+			if (isRefreshingFromCacheEvent) return;
+			isRefreshingFromCacheEvent = true;
+			try {
+				// Detail may include { deviceId }. If it matches current device, refresh sensors only.
+				const detail = ev && typeof ev === "object" ? ev.detail : undefined;
+				const deviceIdFromEvent = detail && typeof detail.deviceId === "string" ? detail.deviceId : null;
+				const curDeviceId = deviceSelect.value || null;
+
+				if (deviceIdFromEvent && curDeviceId && deviceIdFromEvent !== curDeviceId) {
+					// Not the currently selected device; no UI update needed.
+					return;
+				}
+
+				// Sensors changed for current device: refresh UI but keep device/sensor/from/to if possible.
+				await refreshUiKeepingSelection({ deviceId: curDeviceId, keepFromTo: true });
+			} catch (err) {
+				console.error("sensors cache refresh failed", err);
+			} finally {
+				isRefreshingFromCacheEvent = false;
+			}
+		});
+	}
+
 	deviceSelect.addEventListener("change", () => {
 		const deviceId = deviceSelect.value;
 		if (!deviceId) {
@@ -860,6 +962,7 @@
 		}
 	}
 
+	installCacheRefreshListeners();
 	await loadDevices();
 	await restoreSelectionsFromSession();
 	await loadAlertsLatest();

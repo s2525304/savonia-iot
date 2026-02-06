@@ -12,17 +12,34 @@
 <div id="auth-status">Checking login…</div>
 
 <div id="app" hidden>
-  <select id="device-select"></select>
-  <select id="sensor-select" disabled></select>
+  <div class="controls" id="controls">
+    <div class="control-row control-row--selects" id="controls-selects">
+      <label class="field">
+        <span class="field-label">Device</span>
+        <select id="device-select"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">Sensor</span>
+        <select id="sensor-select" disabled></select>
+      </label>
+    </div>
 
-  <label>
-    From
-    <input type="datetime-local" id="from">
-  </label>
-  <label>
-    To
-    <input type="datetime-local" id="to">
-  </label>
+    <div class="control-row control-row--range" id="controls-range">
+      <label class="field">
+        <span class="field-label">From</span>
+        <input type="datetime-local" id="from">
+      </label>
+      <label class="field">
+        <span class="field-label">To</span>
+        <input type="datetime-local" id="to">
+      </label>
+    </div>
+
+    <div class="control-row control-row--actions" id="controls-actions">
+      <button id="load">Load</button>
+      <button id="csv">Download CSV</button>
+    </div>
+  </div>
 
   <div class="zoom" id="zoom">
     <div class="zoom-group" aria-label="Zoom 10 minutes">
@@ -43,8 +60,6 @@
       <button type="button" id="zoom-out-24h" class="zoom-btn" title="Zoom out by 24 hours">Out</button>
     </div>
   </div>
-  <button id="load">Load</button>
-  <button id="csv">Download CSV</button>
 
   <canvas id="chart"></canvas>
 
