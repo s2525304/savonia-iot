@@ -5,12 +5,25 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/savonia-iot
-ExecStart=/usr/bin/node raspberry/dist/measurement-transferrer.js --config raspberry/config/config.json
+
+# Run as a dedicated service user; installer can replace this if desired
+User=savonia-iot
+
+# Stable install location managed by installer
+WorkingDirectory=/opt/savonia-iot
+
+# Resolve node from PATH (supports /usr/bin/node and /usr/local/bin/node)
+ExecStart=/usr/bin/env node raspberry/dist/measurement-transferrer.js --config raspberry/config/config.json
+
+# Ensure PATH includes common Node locations
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# Load secrets/config (connection string etc.)
+EnvironmentFile=/etc/savonia-iot/env
+Environment=NODE_ENV=production
+
 Restart=always
 RestartSec=2
-Environment=NODE_ENV=production
 
 [Install]
 WantedBy=multi-user.target

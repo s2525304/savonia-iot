@@ -8,8 +8,19 @@ After=time-sync.target
 After=systemd-time-wait-sync.service
 Wants=systemd-time-wait-sync.service
 
+
 [Service]
+EnvironmentFile=/etc/savonia-iot/env
 Type=oneshot
-User=pi
-WorkingDirectory=/home/pi/savonia-iot
-ExecStart=/usr/bin/node raspberry/dist/sensor-reader.js --config raspberry/config/config.json --sensorId %i
+
+# Run as the installing user (set by installer); fallback is fine for manual runs
+User=%i
+
+# Set a stable working directory (installer ensures ownership)
+WorkingDirectory=/opt/savonia-iot
+
+# Use env to resolve node from PATH (works for /usr/bin/node and /usr/local/bin/node)
+ExecStart=/usr/bin/env node raspberry/dist/sensor-reader.js --config raspberry/config/config.json --sensorId %i
+
+# Ensure PATH includes common Node locations
+Environment=PATH=/usr/local/bin:/usr/bin:/bin

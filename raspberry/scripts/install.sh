@@ -16,13 +16,27 @@ fi
 
 CONFIG_DEFAULT="$REPO_ROOT_DEFAULT/raspberry/config/config.json"
 SYSTEMD_DIR="/etc/systemd/system"
-ENV_FILE="/var/lib/savonia-iot/.env"
+ENV_FILE="/etc/savonia-iot/env"
 
 # -----------------------------
-# Use system-wide Node/NPM consistently (systemd runs /usr/bin/node)
-# -----------------------------
-NODE_BIN="/usr/bin/node"
-NPM_BIN="/usr/bin/npm"
+# Prefer system-wide Node/NPM.
+# - Pi 4/5 typically installs to /usr/bin via apt.
+# - Pi Zero (ARMv6) is often installed to /usr/local via unofficial builds.
+# Resolve the exact binaries so install/build and systemd units can use the same Node.
+if [[ -x "/usr/bin/node" ]]; then
+	NODE_BIN="/usr/bin/node"
+else
+	NODE_BIN="$(command -v node || true)"
+fi
+
+if [[ -x "/usr/bin/npm" ]]; then
+	NPM_BIN="/usr/bin/npm"
+else
+	NPM_BIN="$(command -v npm || true)"
+fi
+
+# Prefer PATH that includes both common locations; we'll prepend the detected Node/NPM directory later too.
+BASE_PATH="/usr/bin:/usr/local/bin:$PATH"
 
 # -----------------------------
 # Args
@@ -30,20 +44,23 @@ NPM_BIN="/usr/bin/npm"
 REPO_ROOT="${1:-$REPO_ROOT_DEFAULT}"
 CONFIG_PATH="${2:-$CONFIG_DEFAULT}"
 
+# Use the invoking user for ownership and for systemd units unless a dedicated service user is used.
+INSTALL_USER="${SUDO_USER:-$(id -un)}"
+
 if [[ ! -d "$REPO_ROOT" ]]; then
 	echo "ERROR: Repo root not found: $REPO_ROOT"
 	exit 1
 fi
 
-if [[ ! -x "$NODE_BIN" ]]; then
-	echo "ERROR: $NODE_BIN not found. Install Node.js system-wide (NodeSource recommended) so systemd can run services." >&2
-	echo "Try: sudo apt install -y nodejs" >&2
+if [[ -z "$NODE_BIN" || ! -x "$NODE_BIN" ]]; then
+	echo "ERROR: node not found in PATH. Install Node.js system-wide." >&2
+	echo "Pi 4/5: sudo apt install -y nodejs npm" >&2
+	echo "Pi Zero (ARMv6): install an ARMv6 build of Node (often to /usr/local/bin)." >&2
 	exit 1
 fi
 
-if [[ ! -x "$NPM_BIN" ]]; then
-	echo "ERROR: $NPM_BIN not found. Install npm (often included with nodejs) so the installer can run npm ci/build." >&2
-	echo "Try: sudo apt install -y npm" >&2
+if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
+	echo "ERROR: npm not found in PATH. Install npm (often included with Node.js) so the installer can run npm ci/build." >&2
 	exit 1
 fi
 
@@ -109,7 +126,7 @@ echo "Writing env file: $ENV_FILE"
 sudo mkdir -p "$(dirname "$ENV_FILE")"
 echo "IOT_HUB_CONNECTION_STRING=$IOT_HUB_CONNECTION_STRING" | sudo tee "$ENV_FILE" >/dev/null
 sudo chmod 600 "$ENV_FILE"
-sudo chown pi:pi "$ENV_FILE"
+sudo chown "$INSTALL_USER:$INSTALL_USER" "$ENV_FILE"
 
 echo "Repo root : $REPO_ROOT"
 echo "Config    : $CONFIG_PATH"
@@ -120,23 +137,25 @@ echo "Config    : $CONFIG_PATH"
 echo "Installing dependencies and building..."
 cd "$REPO_ROOT"
 
-# Ensure we use the same Node as systemd (/usr/bin/node)
-echo "Using Node: $($NODE_BIN -v) ($(command -v "$NODE_BIN"))"
-echo "Using npm : $($NPM_BIN -v) ($(command -v "$NPM_BIN"))"
+# Ensure npm uses the same Node (important when multiple Node installs exist).
+NODE_DIR="$(dirname "$NODE_BIN")"
+PATH="$NODE_DIR:$BASE_PATH"
 
-# Run npm with a PATH that prefers /usr/bin so native deps compile for the same Node ABI
-PATH="/usr/bin:$PATH" "$NPM_BIN" ci
+echo "Using Node: $($NODE_BIN -v) ($NODE_BIN)"
+echo "Using npm : $($NPM_BIN -v) ($NPM_BIN)"
+
+"$NPM_BIN" ci
 
 # Build workspace packages by their package.json "name" values
-PATH="/usr/bin:$PATH" "$NPM_BIN" run -w @savonia-iot/common build
-PATH="/usr/bin:$PATH" "$NPM_BIN" run -w @savonia-iot/raspberry build
+"$NPM_BIN" run -w @savonia-iot/common build
+"$NPM_BIN" run -w @savonia-iot/raspberry build
 
 # -----------------------------
 # Create runtime directories (best effort)
 # -----------------------------
 echo "Creating runtime directories..."
 sudo mkdir -p /var/lib/savonia-iot /var/log/savonia-iot
-sudo chown -R pi:pi /var/lib/savonia-iot /var/log/savonia-iot
+sudo chown -R "$INSTALL_USER:$INSTALL_USER" /var/lib/savonia-iot /var/log/savonia-iot
 
 # -----------------------------
 # Install base unit files
@@ -151,6 +170,9 @@ sudo cp "$REPO_ROOT/raspberry/scripts/systemd/savonia-iot-sensor@.service" "$SYS
 sudo sed -i "s|^WorkingDirectory=.*$|WorkingDirectory=$REPO_ROOT|" "$SYSTEMD_DIR/savonia-iot-transferrer.service"
 sudo sed -i "s|^WorkingDirectory=.*$|WorkingDirectory=$REPO_ROOT|" "$SYSTEMD_DIR/savonia-iot-sensor@.service"
 
+sudo sed -i "s|^User=.*$|User=$INSTALL_USER|" "$SYSTEMD_DIR/savonia-iot-transferrer.service"
+sudo sed -i "s|^User=.*$|User=$INSTALL_USER|" "$SYSTEMD_DIR/savonia-iot-sensor@.service"
+
 sudo sed -i "s|--config .*config.json|--config $CONFIG_PATH|g" "$SYSTEMD_DIR/savonia-iot-transferrer.service"
 sudo sed -i "s|--config .*config.json|--config $CONFIG_PATH|g" "$SYSTEMD_DIR/savonia-iot-sensor@.service"
 
@@ -160,6 +182,15 @@ for unit in "$SYSTEMD_DIR/savonia-iot-transferrer.service" "$SYSTEMD_DIR/savonia
 		# Insert right after [Service]
 		sudo sed -i "/^\[Service\]/a EnvironmentFile=$ENV_FILE" "$unit"
 	fi
+done
+
+# Ensure unit files use the detected Node binary (works for /usr/bin/node and /usr/local/bin/node).
+for unit in "$SYSTEMD_DIR/savonia-iot-transferrer.service" "$SYSTEMD_DIR/savonia-iot-sensor@.service"; do
+	# Replace common hardcoded node paths
+	sudo sed -i "s|/usr/bin/node|$NODE_BIN|g" "$unit"
+	sudo sed -i "s|/usr/local/bin/node|$NODE_BIN|g" "$unit"
+	# If ExecStart uses bare `node`, make it explicit
+	sudo sed -i "s|^ExecStart=node |ExecStart=$NODE_BIN |" "$unit"
 done
 
 # -----------------------------

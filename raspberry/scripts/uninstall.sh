@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SYSTEMD_DIR="/etc/systemd/system"
-ENV_FILE="/var/lib/savonia-iot/.env"
+ENV_FILE="/etc/savonia-iot/env"
 
 echo "Stopping and disabling services/timers..."
 
@@ -30,10 +30,24 @@ sudo rm -f "$SYSTEMD_DIR/savonia-iot-sensor-"*.timer
 echo "Reloading systemd..."
 sudo systemctl daemon-reload
 
+# Remove env directory if empty
+if sudo test -d "$(dirname "$ENV_FILE")"; then
+	if [ -z "$(sudo ls -A "$(dirname "$ENV_FILE")")" ]; then
+		sudo rmdir "$(dirname "$ENV_FILE")"
+	fi
+fi
+
 # Remove shared env file (contains secrets)
 if sudo test -f "$ENV_FILE"; then
 	echo "Removing env file: $ENV_FILE"
 	sudo rm -f "$ENV_FILE"
 fi
+
+# Optional: remove runtime directories if empty (best effort)
+for d in /var/lib/savonia-iot /var/log/savonia-iot; do
+	if sudo test -d "$d" && [ -z "$(sudo ls -A "$d")" ]; then
+		sudo rmdir "$d" || true
+	fi
+done
 
 echo "Uninstall complete."
