@@ -27,6 +27,14 @@
       "enumValues": ["OPEN", "CLOSED"]
     }
     // ,{
+    //   "sensorId": "dht-temp",
+    //   "type": "dht22",
+    //   "valueType": "number",
+    //   "unit": "C", // or "%" for humidity
+    //   "intervalMs": 10000,
+    //   "gpio": 17
+    // }
+    // ,{
     //   "sensorId": "ruuvi-1",
     //   "type": "ruuvi_temp",
     //   "valueType": "number",

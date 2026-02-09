@@ -124,7 +124,9 @@ fi
 
 echo "Writing env file: $ENV_FILE"
 sudo mkdir -p "$(dirname "$ENV_FILE")"
-echo "IOT_HUB_CONNECTION_STRING=$IOT_HUB_CONNECTION_STRING" | sudo tee "$ENV_FILE" >/dev/null
+# Quote the value to prevent shell splitting on ';' when sourced
+# Azure connection strings do not contain double quotes, so this is safe
+printf 'IOT_HUB_CONNECTION_STRING="%s"\n' "$IOT_HUB_CONNECTION_STRING" | sudo tee "$ENV_FILE" >/dev/null
 sudo chmod 600 "$ENV_FILE"
 sudo chown "$INSTALL_USER:$INSTALL_USER" "$ENV_FILE"
 
