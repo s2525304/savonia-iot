@@ -454,6 +454,7 @@ Seuraavat pitää käytännössä aina tarkistaa ja/tai muuttaa omiin arvoihin `
 - `POSTGRES_DATABASE` – sovelluksen tietokannan nimi
 - `FUNCTIONAPP_NAME` – Function Appin nimi
 - `STATICWEBAPP_NAME` – Static Web Appin nimi
+- `HTTP_API_KEY` – HTTP API avain, skriptit eivät toimi mikäli ei ole vaihdettu 
 
 Muut muuttujat voi aluksi jättää oletuksiin, mutta ne vaikuttavat esim. jonoihin, säilytysaikoihin ja deploy-polkuun.
 
