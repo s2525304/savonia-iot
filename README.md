@@ -27,23 +27,25 @@ Näin sensoriluku ja tiedonsiirto on erotettu toisistaan, ja ratkaisu toimii my�
 ```
 raspberry/
 ├── src/
-│   ├── sensor-reader.ts        # Sensorin lukuprosessi (one-shot)
+│   ├── sensor-reader.ts            # Sensorin lukuprosessi (one-shot)
 │   ├── measurement-transferrer.ts  # Mittausten siirto pilveen
 │   ├── lib/
-│   │   ├── config.ts            # Konfiguraation luku ja validointi
-│   │   ├── sqlite.ts            # SQLite-tietokanta (puskuri)
-│   │   └── log.ts               # Winston-pohjainen lokitus
+│   │   ├── config.ts               # Konfiguraation luku ja validointi
+│   │   ├── sqlite.ts               # SQLite-tietokanta (puskuri)
+│   │   └── log.ts                  # Winston-pohjainen lokitus
 │   └── sensors/
-│       ├── index.ts             # Sensorien rekisteri
-│       ├── types.ts             # Sensorirajapinta
-│       ├── random-temp.ts       # Simuloitu lämpötila-anturi
-│       └── pi-cpu-temp.ts       # Raspberry Pi CPU -lämpötila
-├── dist/                        # Käännetty JavaScript (tsc)
+│       ├── dht22.ts                # DHT22 (GPIO, lämpötila/kosteus)
+│       ├── index.ts                # Sensorien rekisteri
+│       ├── pi-cpu-temp.ts          # Raspberry Pi CPU -lämpötila
+│       ├── random-temp.ts          # Simuloitu lämpötila-anturi
+│       ├── ruuvi-temp.ts           # RuuviTag (BLE, lämpötila)
+│       └── types.ts                # Sensorirajapinta
+├── dist/                           # Käännetty JavaScript (tsc)
 ├── config/
-│   └── config.json              # Raspberry Pi -konfiguraatio
+│   └── config.json                 # Raspberry Pi -konfiguraatio
 └── scripts/
-    ├── install.sh               # Asennusskripti Raspberry Pi:lle
-    └── systemd/                 # systemd service- ja timer-templatet
+    ├── install.sh                  # Asennusskripti Raspberry Pi:lle
+    └── systemd/                    # systemd service- ja timer-templatet
 ```
 
 ---
@@ -83,6 +85,44 @@ Esimerkki:
 - `paths.sqlite`: SQLite-puskurin sijainti
 - `paths.logDir`: lokitiedostojen hakemisto
 - `intervalMs`: kuinka usein sensori luetaan (millisekunteina)
+
+#### Anturien konfigurointi: DHT22 ja RuuviTag
+
+Alla on esimerkit DHT22- ja RuuviTag-anturien konfiguroinnista. Huomaa, että `gpio` viittaa Raspberry Pi:n **BCM GPIO** -numerointiin (ei fyysiseen pinninumeroon).
+
+**DHT22 (GPIO, lämpötila tai kosteus)**
+
+- Kytkentä: VCC (3.3V), GND ja DATA → valittu GPIO.
+- DATA-linja saattaa vaatia **4.7k–10k** pull-up vastuksen VCC:n ja DATA:n väliin, mutta voi toimia ilmankin.
+- Sama anturi voidaan mallintaa joko lämpötilana (`unit: "C"`) tai kosteutena (`unit: "%"`) riippuen siitä, mitä lukija tuottaa.
+
+```json
+{
+  "sensorId": "dht-temp",
+  "type": "dht22",
+  "valueType": "number",
+  "unit": "C",
+  "intervalMs": 10000,
+  "gpio": 17
+}
+```
+
+**RuuviTag (BLE, lämpötila)**
+
+- Raspberry Pi:ssä Bluetooth/BLE täytyy olla käytössä.
+- `address` on tagin BLE MAC-osoite muodossa `aa:bb:cc:dd:ee:ff`.
+- Osoitteen voi yleensä selvittää esimerkiksi `bluetoothctl`-työkalulla (`scan on`) tai muulla BLE-skannerilla.
+
+```json
+{
+  "sensorId": "ruuvi-1",
+  "type": "ruuvi_temp",
+  "valueType": "number",
+  "unit": "C",
+  "intervalMs": 60000,
+  "address": "aa:bb:cc:dd:ee:ff"
+}
+```
 
 ---
 
@@ -272,6 +312,31 @@ Palauttaa raakamittaukset aikaväliltä.
 
 ---
 
+##### Kursoripaginointi (afterTs / afterSeq)
+
+Rajapinta tukee kursoripaginointia suurille dataset’eille.
+
+- **Cursor** koostuu kahdesta osasta: `ts` (aikaleima) ja `seq` (järjestysnumero).
+- Järjestys on aina **`ORDER BY ts ASC, seq ASC`**.
+- Cursor on **exclusive**: `afterTs`/`afterSeq` tarkoittaa *“hae rivit cursorin jälkeen”*.
+- Kun haet seuraavan sivun, anna molemmat parametrit:
+   - `afterTs=<nextCursor.ts>`
+   - `afterSeq=<nextCursor.seq>`
+
+**Huom:** `hourly`-rajapinnassa `afterSeq` hyväksytään, mutta sillä ei käytännössä ole vaikutusta (bucketit ovat tuntitasolla).
+
+**Esimerkki: hae kaksi sivua**
+
+```bash
+# 1) Ensimmäinen sivu
+curl -H "x-api-code: $API_CODE" \
+  "https://<YOUR-SWA-URL>/api/devices/pi-01/sensors/pi-cpu-temp/measurements?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z&limit=2"
+
+# 2) Seuraava sivu (käytä edellisen vastauksen nextCursor-arvoja)
+# Esimerkki nextCursor: { "ts": "2026-01-01T00:01:00Z", "seq": 42 }
+curl -H "x-api-code: $API_CODE" \
+  "https://<YOUR-SWA-URL>/api/devices/pi-01/sensors/pi-cpu-temp/measurements?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z&limit=2&afterTs=2026-01-01T00:01:00Z&afterSeq=42"
+```
 #### 4) Hae tuntiaggregaatti (hourly)
 
 `GET /api/devices/{deviceId}/sensors/{sensorId}/hourly?from&to&limit&afterTs&afterSeq&format`
@@ -482,3 +547,26 @@ Azure Functions deploy tehdään **Zip Deploy** -menetelmällä (Azure CLI), ja 
 - `ENABLE_ORYX_BUILD=true`
 
 Tämä malli välttää tilanteen, jossa Function App näyttää "tyhjältä" (esim. jos build ohitetaan Run-From-Zip/Package -tilassa).
+
+## Autentikointi
+
+Järjestelmässä on kolme erillistä Azuren rajapintaa ja niillä omat autentikointimallinsa:
+
+### 1. Azure IoT Hub (Device Connection String)
+Raspberry Pi lähettää telemetriat IoT Hubiin laitetason autentikoinnilla käyttäen **IoT Hub -yhteysmerkkijonoa** (device connection string). Yhteysmerkkijono sisältää laitteen tunnisteen (`DeviceId`) ja salaisen avaimen (`SharedAccessKey`).
+
+### 2. HTTP API (shared secret)
+WebUI:n käyttämä HTTP API suojataan jaetulla salaisuudella (shared secret / API key). Backend tarkistaa pyynnöissä olevan avaimen ja hylkää pyynnöt, jos avain puuttuu tai on virheellinen.
+
+### 3. Azure Static Web App (Entra ID + roolit)
+Web-käyttöliittymä julkaistaan Azure Static Web Apps -palvelussa. Pääsynhallinta perustuu SWA:n autentikointiin ja rooleihin.
+
+SWA-konfiguraation mukaan:
+
+- `/.auth/*` on sallittu anonyymeille (kirjautumisreitit).
+- `/api/*` vaatii roolin **webui**.
+- `/*` (WebUI) sallii roolit **webui** ja **authenticated**.
+
+Käytännössä WebUI:hin pääsevät vain **webui-ryhmään** kuuluvat käyttäjät. Ryhmään pääsy edellyttää kutsua.
+
+Autentikointi tapahtuu Microsoft- tai GitHub-tilillä. Savonia-tunnuksilla autentikointi ei onnistu ilman kolmansien osapuolten sovellusten sallimista, eikä tätä ole käytössä.
