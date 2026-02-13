@@ -4,6 +4,10 @@ Tässä projektissa Raspberry Pi toimii IoT edge -laitteena. Se lukee anturidata
 
 ### Arkkitehtuurin yleiskuva
 
+Alla oleva kaavio havainnollistaa Raspberry Pi -pään kokonaisuuden: sensorien lukeminen, paikallinen puskurointi (SQLite) ja luotettava siirto pilveen.
+
+![Raspberry Pi -arkkitehtuuri](doc/Raspberry.png)
+
 Raspberry Pi:llä ajetaan kahta pääprosessia:
 
 1. **sensor-reader**  
@@ -209,6 +213,10 @@ Systemd-timer generoituu automaattisesti asennuksen yhteydessä.
 Tässä projektissa pilvipuoli on toteutettu Azuren palveluilla. Raspberry Pi lähettää mittaukset Azure IoT Hubiin, ja Azure Functions prosessoi ne nopeasti sekä välittää ne edelleen tallennukseen ja käyttöliittymälle.
 
 ### Arkkitehtuuri (Azure)
+
+Alla oleva kaavio näyttää pilvipään päävirran IoT Hubista ingest-funktioon, jonoihin sekä edelleen TimescaleDB:hen, blob-arkistoon ja HTTP API:n kautta Web UI:lle.
+
+![Azure-arkkitehtuuri](doc/Azure.png)
 
 Päävirta:
 
